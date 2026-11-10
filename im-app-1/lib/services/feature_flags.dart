@@ -27,6 +27,12 @@ class FeatureFlags {
   /// 空 = 后台未配置 → 复制时提示未配置。
   final ValueNotifier<String> appDownloadUrl = ValueNotifier<String>('');
 
+  /// 推广二维码图片 URL（2026-11-11 需求2，sys_config promo_qrcode_url，
+  /// /auth/config 下发 promoQrcodeUrl）：后台上传，App 端推广中心
+  /// 「保存推广二维码」/ 编辑资料「邀请朋友」下载该图片存入相册。
+  /// 空 = 后台未配置 → 保存时提示未配置。
+  final ValueNotifier<String> promoQrcodeUrl = ValueNotifier<String>('');
+
   /// 是否开启小助手（2026-09-22 需求2，sys_config assistant_enabled 默认 true）
   /// 关闭 → 通讯录不显示小助手入口（注册不自动添加由服务端短路）
   final ValueNotifier<bool> assistantOn = ValueNotifier<bool>(true);
@@ -73,6 +79,7 @@ class FeatureFlags {
         inviteUniversal.value = '${j['inviteMode'] ?? ''}' == 'universal';
         // 2026-11-11 需求：App 下载地址（「邀请好友」「邀请朋友」复制分享）
         appDownloadUrl.value = '${j['appDownloadUrl'] ?? ''}';
+        promoQrcodeUrl.value = '${j['promoQrcodeUrl'] ?? ''}';
         assistantOn.value =
             j['assistantOn'] != false && j['assistantOn'] != 'false';
         channelOn.value =

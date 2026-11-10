@@ -120,13 +120,16 @@ class _MePageState extends State<MePage> {
   // ===== 卡片 / 行（逻辑 px）=====
   static const double _cardGutter = 20.7; // 卡片左右外边距
   static const double _cardRadius = 23.0;
-  static const double _rowVPad = 14.5; // 行上下内边距
+  // 2026-11-11 行距收紧：14.5 → 10.5（分隔线离文字更近，用户反馈「线距离
+  // 中间的文字太高了」）；分隔线左内缩 79 → 101：与文字 ink 左缘 _textLeft
+  // 对齐（「从文字开始画」三页统一口径）
+  static const double _rowVPad = 10.5; // 行上下内边距
   static const double _iconLeft = 17.7; // 图标块距卡片左缘
   static const double _iconBox = 44.0;
   static const double _iconRadius = 10.0;
   static const double _textLeft = 101.0; // 标题/副标题 ink 左缘
   static const double _chevronGutter = 20.0; // chevron 图标框右缘 → 卡片右缘
-  static const double _sepIndent = 79.0; // 分隔线左内缩（距卡片左缘）
+  static const double _sepIndent = 101.0; // 分隔线左内缩（距卡片左缘，= 文字左缘）
 
   // ===== 色值（截图实测）=====
   static const Color _blueTop = Color(0xFF75BEF5);

@@ -576,7 +576,9 @@ class _ContactsPageState extends State<ContactsPage> {
     return InkWell(
       onTap: onTap,
       child: SizedBox(
-        height: 70.0 * s,
+        // 2026-11-11 行距收紧：70 → 60（图标 24 居中，上下各留 18），
+        // 分隔线离文字更近（用户反馈「线距离中间的文字太高了」）
+        height: 60.0 * s,
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: 24.3 * s),
           child: Row(
@@ -655,9 +657,13 @@ class _ContactsPageState extends State<ContactsPage> {
     );
   }
 
-  /// 联系人行：满宽出血（x0 / w420 / h 86.7）。
-  /// 头像圆角方形 r11 / 56×56（左 20.7、行内 +15.3）；
-  /// 名字 20/w500/#121826（左 95.7、行内 +19.0）；副标题 18/w400/#6C737D（左 96.0、行内 +50.7）。
+  /// 联系人行：满宽出血（x0 / w420 / h 80）。
+  /// 2026-11-11 需求：行高/头像/分隔线口径**与消息列表完全一致**——
+  /// 行高 86.7→80、头像 56→60 垂直居中（上下各留 10）、名字-账号间隔 12→6
+  /// （用户反馈「名字和账号中间间隔有点多了」）、分隔线缩进 95.7→96.6
+  /// （=文字 ink 左缘 20.7+60+15.9，与消息列表同一落位）。
+  /// 头像圆角方形 r11.8 / 60×60（左 20.7、行内 +10）；
+  /// 名字 20/w500（左 96.6、行内 +15.9）；副标题 18/w400（左 96.6）。
   Widget _friendTile(Map<String, dynamic> f) {
     final s = v2Scale(context);
     final id = f['id']?.toString() ?? '';
@@ -718,7 +724,8 @@ class _ContactsPageState extends State<ContactsPage> {
         }
       },
       child: Container(
-        height: 86.7 * s,
+        // 2026-11-11：行高 86.7→80，与消息列表行高一致（上下各留 10 给 60 头像）
+        height: 80.0 * s,
         color: selected
             ? Color.lerp(_cardOf(context), AppTheme.primary, 0.10)!
             : _cardOf(context),
@@ -726,16 +733,19 @@ class _ContactsPageState extends State<ContactsPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: EdgeInsets.only(left: 20.7 * s, top: 15.3 * s),
+              padding: EdgeInsets.only(left: 20.7 * s, top: 10.0 * s),
               // 2026-10-07 需求3：删除 Hero 源端（与好友资料页同步移除）
               // —— 头像进资料页不再有缩放定位飞行动画
               child: _avatarOf(name, id,
-                  size: 56 * s, radius: 11 * s, url: f['avatar']?.toString()),
+                  size: 60 * s, radius: 11.8 * s, url: f['avatar']?.toString()),
             ),
             Expanded(
               child: Padding(
-                padding: EdgeInsets.only(left: 19.0 * s, top: 16.5 * s),
+                // 2026-11-11：行内距 19.0→15.9、去固定 top 16.5 改垂直居中
+                // （与消息列表同款布局：头像 60 定行高，文字块整列居中）
+                padding: EdgeInsets.only(left: 15.9 * s),
                 child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
@@ -769,9 +779,10 @@ class _ContactsPageState extends State<ContactsPage> {
                         ],
                       ],
                     ),
-                    SizedBox(height: 12 * s),
+                    // 2026-11-11：名字-账号间隔 12→6（与消息列表名字/预览间隔一致）
+                    SizedBox(height: 6 * s),
                     Padding(
-                      // 副标题 ink 左缘 96.0（名字 95.7 + 0.3）
+                      // 副标题 ink 左缘 96.6（名字左缘对齐，2026-11-11 与消息列表统一）
                       padding: EdgeInsets.only(left: 0.3 * s),
                       child: Text(f['account']?.toString() ?? 'ID $id',
                           maxLines: 1,
@@ -804,7 +815,9 @@ class _ContactsPageState extends State<ContactsPage> {
     ];
     for (var i = 0; i < rows.length; i++) {
       out.add(_friendTile(rows[i]));
-      if (i != rows.length - 1) out.add(_insetLine(context, s, 95.7));
+      // 2026-11-11：线缩进 95.7→96.6 = 新文字左缘（20.7+60 头像+15.9 间距），
+      // 与消息列表分隔线同一落位（线从文字起画）
+      if (i != rows.length - 1) out.add(_insetLine(context, s, 96.6));
     }
     return out;
   }

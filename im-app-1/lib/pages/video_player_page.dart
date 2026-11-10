@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import '../l10n/app_locale.dart';
+import '../utils/image_saver.dart';
+import '../widgets/app_dialogs.dart';
 
 /// 朋友圈视频播放页（2026-11-07 需求3，新建简易全屏播放页）：
 /// 黑底全屏 video_player，点击画面切换播放/暂停，顶部返回按钮，
@@ -12,6 +14,8 @@ import '../l10n/app_locale.dart';
 /// 松手速度/位移超阈值 pop，否则回弹。交互参数参考 image_viewer_page.dart
 /// 的下滑关闭实现（位移/透明度/速度阈值），视频画面比图片高，位移阈值放宽
 /// 到 160px。播放器暂停/播放状态不受手势影响（手势只驱动位移，不碰控制器）。
+/// 2026-11-11 需求3：底部新增悬浮「下载」按钮——下载视频存入系统相册
+/// （与朋友圈/聊天视频共用本页，下载中转圈防重复点击）。
 class VideoPlayerPage extends StatefulWidget {
   final String url;
   const VideoPlayerPage({super.key, required this.url});
@@ -24,6 +28,9 @@ class _VideoPlayerPageState extends State<VideoPlayerPage>
     with TickerProviderStateMixin {
   VideoPlayerController? _ctrl;
   bool _failed = false;
+
+  // ===== 2026-11-11 需求3：下载到相册 =====
+  bool _saving = false;
 
   // ===== 2026-11-13 修复（问题7）：下滑关闭 =====
   /// 拖拽跟手的垂直位移（正=下滑）；拖拽中整个播放层随手指平移并渐隐
@@ -66,6 +73,18 @@ class _VideoPlayerPageState extends State<VideoPlayerPage>
     } catch (_) {
       if (mounted) setState(() => _failed = true);
     }
+  }
+
+  // ===== 2026-11-11 需求3：下载到相册 =====
+  Future<void> _saveVideo() async {
+    if (_saving) return;
+    final t = AppLocalizations.of(context).t;
+    setState(() => _saving = true);
+    final ok = await ImageSaver.saveNetworkVideo(widget.url);
+    if (!mounted) return;
+    setState(() => _saving = false);
+    AppDialogs.toast(
+        context, t(ok ? 'videoSaved' : 'videoSaveFailed'));
   }
 
   @override
@@ -195,6 +214,39 @@ class _VideoPlayerPageState extends State<VideoPlayerPage>
                       onPressed: () => Navigator.of(context).pop(),
                       icon: const Icon(Icons.arrow_back_ios_new,
                           size: 20, color: Colors.white),
+                    ),
+                  ),
+                ),
+                // 2026-11-11 需求3：底部悬浮「下载」按钮——存入系统相册
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 18),
+                      child: GestureDetector(
+                        onTap: _saveVideo,
+                        behavior: HitTestBehavior.opaque,
+                        child: Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.55),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                                color: Colors.white30, width: 1),
+                          ),
+                          alignment: Alignment.center,
+                          child: _saving
+                              ? const SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white))
+                              : const Icon(Icons.download_rounded,
+                                  size: 28, color: Colors.white),
+                        ),
+                      ),
                     ),
                   ),
                 ),

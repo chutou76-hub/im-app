@@ -5,6 +5,7 @@ import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
 import '../services/feature_flags.dart';
 import '../theme/app_theme.dart';
+import '../utils/image_saver.dart';
 import '../widgets/app_avatar.dart';
 import '../widgets/app_back_button.dart';
 import '../widgets/app_dialogs.dart';
@@ -150,17 +151,20 @@ class _InvitePromotionPageState extends State<InvitePromotionPage> {
     }
   }
 
-  /// 2026-11-11 需求：邀请好友按钮——复制后台配置的 App 下载地址，
-  /// 提示「App下载地址已复制」；未配置时提示先到后台设置
-  void _copyInviteUrl() {
+  /// 2026-11-11 需求2 改版：保存后台配置的推广二维码图片到相册
+  /// （原「复制下载地址」废弃——下载地址改为后台上传二维码图）。
+  /// 未配置时提示先到后台设置
+  Future<void> _saveQrcode() async {
     final t = AppLocalizations.instance.t;
-    final url = FeatureFlags.instance.appDownloadUrl.value.trim();
+    final url = FeatureFlags.instance.promoQrcodeUrl.value.trim();
     if (url.isEmpty) {
-      AppDialogs.toast(context, t('inviteUrlNotSet'));
+      AppDialogs.toast(context, t('promoQrNotSet'));
       return;
     }
-    Clipboard.setData(ClipboardData(text: url));
-    AppDialogs.toast(context, t('inviteUrlCopied'));
+    final ok = await ImageSaver.saveNetworkImage(url);
+    if (!mounted) return;
+    AppDialogs.toast(
+        context, t(ok ? 'promoQrSaved' : 'promoQrSaveFailed'));
   }
 
   @override
@@ -316,13 +320,15 @@ class _InvitePromotionPageState extends State<InvitePromotionPage> {
               ),
             ],
           ),
-          // 2026-11-11 需求：邀请好友按钮——复制 App 下载地址分享
+          // 2026-11-11 需求2 改版：按钮「保存推广二维码」——下载后台配置的
+          // 二维码图片存入相册（替代原「邀请好友」复制下载地址）
           // 2026-11-11 修复：固定高 44 + 主题默认 vertical:14 padding 导致 .icon
-          // 变体内容区只剩 ~16px，中文文字上下被裁；显式收紧垂直 padding
+          // 变体内容区只剩 ~16px，中文文字上下被裁；显式收紧垂直 padding，
+          // 高度提至 48 彻底消除裁切
           const SizedBox(height: 14),
           SizedBox(
             width: double.infinity,
-            height: 44,
+            height: 48,
             child: FilledButton.icon(
               style: FilledButton.styleFrom(
                 backgroundColor: AppTheme.green,
@@ -331,8 +337,8 @@ class _InvitePromotionPageState extends State<InvitePromotionPage> {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
               ),
-              onPressed: _copyInviteUrl,
-              icon: const Icon(Icons.person_add_alt_1_outlined, size: 20),
+              onPressed: _saveQrcode,
+              icon: const Icon(Icons.download_rounded, size: 20),
               label: Text(t('promotionInviteBtn'),
                   style: const TextStyle(
                       fontSize: 15, fontWeight: FontWeight.w600)),

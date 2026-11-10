@@ -947,7 +947,9 @@ class ChatListPageState extends State<ChatListPage> {
     // → **88**（-13.3，约 -13%）：头像 66.7→60 后上下留白 17.3→14，两行文字间距 8→6。
     // 行是**满宽出血**的：没有左右卡片边距、没有圆角，
     // 分行靠「左缩进 60 的分隔线」——与旧版「12/4 卡片 + 圆角」完全不同。
-    final rowH = 88 * s;
+    // 2026-11-11 行距收紧：行高 88 → 80（头像 60 居中，上下各留 10），
+    // 分隔线离文字更近（用户反馈「线距离中间的文字太高了」）
+    final rowH = 80 * s;
     final dividerColor =
         dark ? context.cs.outlineVariant : const Color(0xFFEBEBEB);
     return Column(
@@ -1031,7 +1033,7 @@ class ChatListPageState extends State<ChatListPage> {
                 });
               },
               child: SizedBox(
-                // 行高 88、头像 60 垂直居中（上下各留 14）
+                // 行高 80（2026-11-11 由 88 收紧）、头像 60 垂直居中（上下各留 10）
                 height: rowH,
                 child: Padding(
                   padding: EdgeInsets.symmetric(horizontal: 20.7 * s),
@@ -1196,10 +1198,11 @@ class ChatListPageState extends State<ChatListPage> {
             ),
           ),
         ),
-        // 分隔线：实测 #EBEBEB、厚 1.0、**左缩进 60**（与头像右缘对齐）、
-        // 右侧通到屏幕右边缘；最后一行之后也有一条（截图 y=419.8 那条）。
+        // 分隔线：实测 #EBEBEB、厚 1.0。2026-11-11 统一「从文字起画」：
+        // 左缩进 60（原与头像右缘对齐）→ 96.6（= 文字 ink 左缘 20.7+头像60+15.9），
+        // 与通讯录/用户中心同口径；右侧通到屏幕右边缘。
         Padding(
-          padding: EdgeInsets.only(left: 60 * s),
+          padding: EdgeInsets.only(left: 96.6 * s),
           child: Container(height: 1, color: dividerColor),
         ),
       ],

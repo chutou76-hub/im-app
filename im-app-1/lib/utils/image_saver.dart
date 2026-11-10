@@ -55,4 +55,15 @@ class ImageSaver {
     if (!name.contains('.')) name = '$name.jpg';
     return name;
   }
+
+  /// 2026-11-11 需求3：下载网络视频并保存到相册（朋友圈/聊天视频播放页
+  /// 「下载」按钮共用）。成功返回 true；失败返回 false（调用方统一 toast）。
+  static Future<bool> saveNetworkVideo(String url) async {
+    var full = url;
+    if (!full.startsWith('http')) {
+      final base = AppConfig.instance.apiBase;
+      full = full.startsWith('/') ? '$base$full' : '$base/$full';
+    }
+    return saver_impl.saveVideoUrl(full);
+  }
 }

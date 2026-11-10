@@ -117,3 +117,14 @@ String _mimeFromName(String name) {
   if (n.endsWith('.bmp')) return 'image/bmp';
   return 'image/jpeg';
 }
+
+/// 2026-11-11 需求3：Web 端保存视频——新标签页打开视频地址，
+/// 浏览器自带下载/长按保存；跨域时由用户手动保存。
+Future<bool> saveVideoUrl(String fullUrl) async {
+  try {
+    html.window.open(fullUrl, '_blank');
+    return true;
+  } catch (_) {
+    return false;
+  }
+}

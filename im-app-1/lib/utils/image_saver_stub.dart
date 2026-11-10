@@ -6,3 +6,8 @@ Future<bool> saveImageBytes(
     Uint8List? bytes, String fileName, String url) async {
   return false;
 }
+
+/// 平台保存兜底占位（视频，2026-11-11 需求3）：实际不会被选中。
+Future<bool> saveVideoUrl(String fullUrl) async {
+  return false;
+}

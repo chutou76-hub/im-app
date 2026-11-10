@@ -8,6 +8,7 @@ import '../services/feature_flags.dart';
 import '../services/friend_service.dart';
 import '../services/settings_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/image_saver.dart';
 import '../widgets/app_avatar.dart';
 import '../widgets/app_dialogs.dart';
 import '../widgets/v2_kit.dart';
@@ -433,16 +434,18 @@ class _EditProfilePageState extends State<EditProfilePage> {
             iconBg: _kIconGreen,
             icon: Icons.person_add_alt_1_outlined,
             title: t('epInviteFriends'),
-            // 2026-11-11 需求：复制后台配置的 App 下载地址（/auth/config 下发），
-            // 提示「App下载地址已复制」；未配置时提示先到后台设置
-            onTap: () {
-              final url = FeatureFlags.instance.appDownloadUrl.value.trim();
+            // 2026-11-11 需求2 改版：与推广中心按钮同口径——下载后台配置的
+            // 推广二维码图片存入相册（替代原「复制下载地址」）
+            onTap: () async {
+              final url = FeatureFlags.instance.promoQrcodeUrl.value.trim();
               if (url.isEmpty) {
-                AppDialogs.toast(context, t('inviteUrlNotSet'));
+                AppDialogs.toast(context, t('promoQrNotSet'));
                 return;
               }
-              Clipboard.setData(ClipboardData(text: url));
-              AppDialogs.toast(context, t('inviteUrlCopied'));
+              final ok = await ImageSaver.saveNetworkImage(url);
+              if (!mounted) return;
+              AppDialogs.toast(
+                  context, t(ok ? 'promoQrSaved' : 'promoQrSaveFailed'));
             },
           ),
         ],
