@@ -24,7 +24,7 @@
 #   developer.apple.com（目标开发者账号）→ 用户和访问 → 集成(App Store Connect API)
 #   → 生成密钥，角色 App Manager，下载 .p8（只此一次），记下 Issuer ID / Key ID
 #   → Codemagic Settings → Integrations → App Store Connect → Connect，
-#     **API key name 必须填 siqu-asc**（与下面 integrations 一字不差）
+#     **API key name 必须填 codemagic**（与下面 integrations 一字不差）
 #   ——这个集成只用于「构建产物自动上传 App Store Connect」，与签名方式无关。
 
 workflows:
@@ -34,7 +34,7 @@ workflows:
     working_directory: im-app-1        # monorepo：所有步骤（含自动依赖安装）都在 im-app-1/ 执行
 
     integrations:
-      app_store_connect: siqu-asc    # ← 必须和 Codemagic UI 里保存的集成名完全一致
+      app_store_connect: codemagic   # ← 必须和 Codemagic UI 里保存的集成名完全一致
 
     environment:
       flutter: stable
