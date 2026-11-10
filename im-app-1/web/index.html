@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="A new Flutter project.">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="im_app">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>im_app</title>
+  <link rel="manifest" href="manifest.json">
+
+  <!-- jsQR（H5 扫一扫的二维码解码器，本地 vendor 不依赖 CDN）。
+       scan_camera_web.dart 通过 window.jsQR 调用；defer 保证 Flutter 启动前就绪。 -->
+  <script src="jsQR.min.js" defer></script>
+
+  <!-- eruda 移动端调试控制台（本地 vendor）：URL 带 ?debug=1 时启用，
+       用于 iPhone Safari 排障（Windows 无 Safari Web Inspector）。
+       排障结束后可整段移除。 -->
+  <script>
+    if (window.location.search.indexOf('debug=1') >= 0) {
+      document.write('<script src="eruda.min.js"><\/script>');
+      window.addEventListener('load', function () {
+        if (window.eruda) { eruda.init(); console.log('[debug] eruda 已启用'); }
+      });
+    }
+  </script>
+</head>
+<body>
+  <!--
+    You can customize the "flutter_bootstrap.js" script.
+    This is useful to provide a custom configuration to the Flutter loader
+    or to give the user feedback during the initialization process.
+
+    For more details:
+    * https://docs.flutter.dev/platform-integration/web/initialization
+  -->
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
