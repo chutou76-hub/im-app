@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 系统闪屏图标缩放（2026-09-20 二次校准）：windowSplashScreenAnimatedIcon
+     实测按 288dp 整框渲染（用户截图 45.1%×360dp≈164dp=288×0.56 反推证实）。
+     inset 31.25% → 可见内容 = 288×(1-2×0.3125) = 108dp，任何机型恒定，
+     与 Flutter 侧 _SplashHold 固定 108dp 逐像素对齐——系统闪屏 → Flutter
+     闪屏切换肉眼不可见（此前 22% 是按 192dp 基准误算，出现 164→108 跳变
+     = 用户看到「两个启动图」）。引用原 @drawable/android12splash（密度/
+     夜间变体由资源系统自动匹配）。 -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/android12splash"
+    android:insetLeft="31.25%"
+    android:insetTop="31.25%"
+    android:insetRight="31.25%"
+    android:insetBottom="31.25%" />

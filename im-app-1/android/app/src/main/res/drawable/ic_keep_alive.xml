@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 保活前台服务通知栏小图标：
+     Android 通知 small icon 只取 alpha 通道渲染为单色剪影，
+     必须用白色(纯色)+透明底的矢量图，不能用彩色 launcher 图标（会显示灰色空白方块）。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 白色消息气泡（与 App 图标呼应） -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,3C7.03,3 3,6.58 3,11c0,2.09 0.88,4 2.33,5.44C5.11,17.66 4.7,19.2 4.04,20.28c-0.19,0.31 0.08,0.7 0.44,0.64c1.94,-0.32 3.71,-1.09 5.03,-1.86C10.28,19.35 11.13,19.5 12,19.5c4.97,0 9,-3.8 9,-8.5S16.97,3 12,3z" />
+</vector>

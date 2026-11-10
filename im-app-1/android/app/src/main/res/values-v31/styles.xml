@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Theme applied to the Android Window while the process is starting when the OS's Dark Mode setting is off -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:forceDarkAllowed">false</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <item name="android:windowSplashScreenBackground">#ffffff</item>
+        <!-- 2026-11-09 修复「两个启动图」：此前指向原始 android12splash（按 288dp
+             整框渲染 → 又大又方的第一屏），切换到 Flutter 侧闪屏（108dp 椭圆 logo）
+             时出现尺寸跳变。改指向 android12splash_inset（31.25% inset 校准，
+             可见内容恒 108dp，与 Flutter _SplashHold 逐像素对齐）——
+             两屏同 logo 同尺寸，肉眼无切换感 = 实际只看到一张启动图。 -->
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/android12splash_inset</item>
+    </style>
+    <!-- Theme applied to the Android Window as soon as the process has started.
+         This theme determines the color of the Android Window while your
+         Flutter UI initializes, as well as behind your Flutter UI while its
+         running.
+         
+         This Theme is only used starting with V2 of Flutter's Android embedding. -->
+    <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowBackground">?android:colorBackground</item>
+    </style>
+</resources>

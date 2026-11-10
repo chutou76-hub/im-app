@@ -44,5 +44,12 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Android 构建缓存与本机配置（2026-11-11 入库 GitHub 前补齐，.gradle 有 63M）
+.gradle/
+**/android/.gradle/
+local.properties
+key.properties
+captures/
+
 # 打包工具的图标/启动图生成缓存（源图 大小+mtime 指纹）
 tool/.gen_cache.json

@@ -1,0 +1,128 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- ===== 基础网络（HTTP / WebSocket 必需）===== -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <!-- ===== 前台服务保活（flutter_foreground_task，保持 WS 长连接）=====
+         只用 remoteMessaging：无时长限制且是厂商认可的消息类保活场景；
+         dataSync 在 Android 15（targetSdk 35）有 24 小时内最多 6 小时硬限制，
+         超时整个前台服务被系统强制停止（通知栏直接消失），绝不能再声明 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING"/>
+    <!-- 电池优化白名单：ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 直接弹授权框必需，
+         缺了它 startActivity 会直接被拒（表现为点了"去开启"没反应） -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+
+    <!-- ===== 音视频通话（腾讯云 TRTC）===== -->
+    <!-- 麦克风：语音/视频通话采集音频，缺它双方都听不到声音 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <!-- 摄像头：视频通话采集画面 -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- 蓝牙耳机 -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <!-- 通话中监听来电/保持唤醒 -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+
+    <!-- ===== 位置消息（type=14 选点页 HTML5 定位，2026-09-21 需求1）===== -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+
+    <!-- ===== 图片/文件（image_picker 选图发送，Android 13+ 细分媒体权限）===== -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"/>
+    <!-- 朋友圈图片保存到相册：Android ≤12 写 MediaStore 需要；13+ 不需要（maxSdkVersion=32）
+         tools:replace：覆盖 image_gallery_saver_plus 清单里的同名权限（其 maxSdkVersion=28） -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"
+        tools:replace="android:maxSdkVersion"/>
+
+    <!-- 摄像头非必需（语音通话也要能装），声明为可选 -->
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
+
+    <application
+        android:label="私趣"
+        tools:replace="android:label"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:enableOnBackInvokedCallback="true"
+        android:usesCleartextTraffic="true">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Specifies an Android theme to apply to this Activity as soon as
+                 the Android process has started. This theme is visible to the user
+                 while the Flutter UI initializes. After that, this theme continues
+                 to determine the Window background behind the Flutter UI. -->
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <!-- ===== 保活前台服务（flutter_foreground_task，服务名不可改）=====
+             Android 14+ 必须声明 foregroundServiceType；
+             只声明 remoteMessaging（消息类，无时长限制）——
+             dataSync 有 Android 15 单日 6 小时硬限制，超时服务整体被杀，不可用 -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="remoteMessaging"
+            android:exported="false" />
+        <!-- 保活通知栏单色小图标：插件通过该 meta-data 读取 drawable 资源 id，
+             不配置则回退 launcher 彩色图标 → 通知栏显示灰色空白方块 -->
+        <meta-data
+            android:name="io.github.imapp.keep_alive.notification_icon"
+            android:resource="@drawable/ic_keep_alive" />
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+    <!-- Required to query activities that can process text, see:
+         https://developer.android.com/training/package-visibility and
+         https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
+
+         In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- 链接卡片「浏览器打开」/ 文件预览下载走 url_launcher 的
+             launchUrl(mode: LaunchMode.externalApplication)，底层是 ACTION_VIEW。
+             Android 11（API 30）+ 起受包可见性限制，必须在此声明可见的 intent，
+             否则 queryIntentActivities/resolveActivity 返回空 → 点击无反应。
+             url_launcher_android 自带的 manifest 未声明 queries，需在 App 侧补。
+             http 一并声明：本项目 usesCleartextTraffic=true，外链可能是 http://。 -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <category android:name="android.intent.category.BROWSABLE"/>
+            <data android:scheme="https"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <category android:name="android.intent.category.BROWSABLE"/>
+            <data android:scheme="http"/>
+        </intent>
+    </queries>
+</manifest>
