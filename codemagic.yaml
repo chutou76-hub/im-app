@@ -1,65 +1,33 @@
-# Codemagic CI 配置（放仓库根目录）
-# 仓库是 monorepo，Flutter 工程在 im-app/ 子目录。
-# 关键：working_directory 必须设在「workflow 级别」（见 ios-ipa 下那一行），
-#       这样 Codemagic 内置的「Install Flutter dependencies」自动步骤 + 所有脚本
-#       都会切到 im-app/ 再执行。只写在单个 script 上无效——自动步骤仍会去仓库根找 pubspec.yaml。
+# Codemagic CI 配置（chutou76-hub/im-app 仓库，放仓库根目录——Codemagic 只认根目录的 codemagic.yaml）
+# 仓库结构：Flutter 工程在 im-app-1/ 子目录 → working_directory 必须设在 workflow 级别
+# 指向 im-app-1（见下），这样内置「Install Flutter dependencies」自动步骤 + 所有脚本
+# 都会在 im-app-1/ 里执行。只写在单个 script 上无效——自动步骤仍会去仓库根找 pubspec.yaml。
 #
-# ⚠ Swift Package Manager 必须关闭（2026-09-22 实锤）：
+# ⚠ Swift Package Manager 必须关闭：
 #   新版 Flutter 默认启用 SPM，会把 flutter_webrtc 迁到 SPM；而 livekit_client
 #   只有 CocoaPods 实现（podspec 依赖 FlutterWebRTC pod）→ pod install 报
 #   "A dependency conflict has occurred because livekit_client uses CocoaPods
 #    while flutter_webrtc uses Swift Package Manager"。
-#   修复三件套（均已入库）：
-#     1) 每次构建先 `flutter config --no-enable-swift-package-manager`（见下方脚本）
-#     2) im-app/ios/Runner.xcodeproj/project.pbxproj 已移除全部 SPM 引用
-#     3) 补齐 im-app/ios/Podfile（platform :ios, 15.5，全 CocoaPods 路线）
-#   注意：livekit_client 官方未支持 SPM，未来升级 Flutter 后如遇同类报错先查这条。
+#   修复：每次构建先 `flutter config --no-enable-swift-package-manager`（见下方脚本）。
 #
-# 签名方式：手动上传证书 + 描述文件（2026-09-19 定稿，不用 API Key 自动签名）
-#   1. Codemagic 网页 → Personal Account → Settings → Code signing identities → 上传：
-#      - .p12 证书（含私钥）
-#      - .mobileprovision 描述文件（Bundle ID 必须是 com.qingniao.im，类型与下面
-#        distribution_type 一致：真机测试用 Ad-Hoc，上架用 App Store）
-#   2. distribution_type 决定导出方式（打包类型在这里指定）：
-#      - 真机测试（Ad-Hoc）→ ad_hoc
-#      - App Store 上架   → app_store（当前配置，TestFlight 上传必须用这个）
-#      - 企业证书(In-House) → enterprise
-#      - 开发调试          → development
-#   3. use-profiles 脚本会自动把上传的证书/描述文件挂到工程上
-#   （API Key 自动签名的写法仍见文末注释，想换回去随时可用）
+# 签名方式：**App Store Connect API Key 自动签名**（2026-11-11 定稿）
+#   构建时 `xcode-project use-profiles` 自动用 ASC 密钥向苹果
+#   申请/下载 App Store 分发证书与描述文件并挂到工程上——
+#   不需要手动上传 .p12 / .mobileprovision（网页 Code signing identities 保持空）。
+#   缺证书时自动新建（Apple 每类分发证书上限 2 个，超限先去 ASC 删旧的）。
 #
-# ★★ 2026-11-10 切换为「自动证书」（推荐，免去每年换证书/加设备手动传 p12）：
-#   前提：integrations.app_store_connect 的 ASC API Key 权限 ≥ App Manager（已满足）。
-#   操作（只需做一次）：
-#     1. Codemagic 网页 → codemagic.yaml settings → Code signing identities
-#        → 删掉已上传的 .p12 和 .mobileprovision（删掉后才不会优先用手动的）；
-#     2. 保持 integrations: app_store_connect: siqu-asc 不动（yaml 已配好）；
-#     3. 构建脚本里的 `xcode-project use-profiles` 会自动用 ASC API Key
-#        向苹果申请/创建 App Store 分发证书与描述文件并挂到工程上——
-#        缺证书时自动新建（Apple 每类证书上限 2 个，超限时先去 ASC 删旧的）。
-#   若想回退手动 p12：重新在 Code signing identities 上传即可，无需改本文件。
-#
-# 上传方式：App Store Connect 集成（auth: integration），2026-09-24 新增
-#   前置条件（只需做一次）：
-#     1) App Store Connect → 用户和访问 → 集成 → App Store Connect API → 生成密钥
-#        权限选 App Manager（够用，别给 Admin），下载 .p8（只此一次，丢了要重生成）
-#     2) Codemagic 网页 → Settings → Integrations → Developer Portal → Connect
-#        ⚠ 个人账号（Personal Account）没有 Teams 菜单，入口就是顶部/侧边的 Settings。
-#           Settings 页面分两组：
-#             General settings        → Integrations          ← 在这里配 ASC 密钥
-#             codemagic.yaml settings → Code signing identities ← 你的 p12/描述文件在这
-#        填 Issuer ID / Key ID / 上传 .p8，
-#        API key name 必须填「qingniao-asc」（与下面 integrations 的值一字不差）。
-#        后续修改点 Developer Portal 旁边的 Manage keys。
-#   为什么用 integration：密钥只存在 Codemagic 里，不进 yaml、不进构建日志、不进环境变量。
-#     注：它不会影响签名方式——自动签名是靠脚本里跑 `app-store-connect fetch-signing-files`
-#     触发的，本文件没这条命令，所以签名始终是手动上传的 p12，两者互不干扰。
+# 前置操作（Codemagic 网页，只需做一次）：
+#   1. developer.apple.com（目标开发者账号）→ 用户和访问 → 集成(App Store Connect API)
+#      → 生成密钥，角色 App Manager，下载 .p8（只此一次），记下 Issuer ID / Key ID
+#   2. Codemagic 网页 → Settings → Integrations → App Store Connect → Connect
+#      填 Issuer ID / Key ID / 上传 .p8，**API key name 必须填 siqu-asc**（与下面 integrations 一字不差）
+#   3. Settings → codemagic.yaml settings → Code signing identities 保持为空（不要传 p12）
 
 workflows:
   ios-ipa:
-    name: iOS IPA
+    name: iOS IPA (App Store)
     max_build_duration: 60
-    working_directory: im-app            # monorepo：所有步骤（含自动依赖安装）都在此目录执行
+    working_directory: im-app-1        # monorepo：所有步骤（含自动依赖安装）都在 im-app-1/ 执行
 
     integrations:
       app_store_connect: siqu-asc    # ← 必须和 Codemagic UI 里保存的集成名完全一致
@@ -69,14 +37,14 @@ workflows:
       xcode: latest
       ios_signing:
         distribution_type: app_store             # TestFlight/上架必须 app_store
-        bundle_identifier: com.siqu.chat   # 必须与 im-app/config/app_build.json 的 iosPackageName 一致
+        bundle_identifier: com.siqu.chat         # 与 config/app_build.json 的 iosPackageName 一致
       vars:
         # App Store Connect → 你的 App → App 信息 → Apple ID（10 位数字）
-        # 本地手动上传时工具输出过：Identified application as "chatpu" (6813899838)
-        APP_STORE_APP_ID: "6813899838"
-        # Build Number 基线：你手动传过的最高 build 号（1.3.9 = build 13）。
-        # 仅当查 TestFlight 失败时作为兜底，之后每次 CI 构建都会比它大。
-        BASE_BUILD_NUMBER: "13"
+        # 2026-11-11 用户确认：目标开发者账号下 bundle id com.siqu.chat 的 App 记录
+        APP_STORE_APP_ID: "6831744546"
+        # Build Number 兜底基线：查不到 TestFlight 最新 build 时用「基线+构建次数」。
+        # 与 config/app_build.json 的 versionCode(33) 对齐；正常情况走 TestFlight 实时查询
+        BASE_BUILD_NUMBER: "33"
     scripts:
       - name: 拉取 Flutter 依赖
         script: |
@@ -87,14 +55,14 @@ workflows:
         script: dart run tool/apply_config.dart
         # ⚠ environment.bundle_identifier 与 app_build.json 的 iosPackageName
         #   必须同步改（签名按包名匹配描述文件，错一个字母都签不上）。
-      - name: 挂载签名并打包 IPA
+      - name: 挂载自动签名并打包 IPA
         script: |
+          # 自动签名：用 ASC API Key 申请/下载 app_store 证书+描述文件挂到工程
           xcode-project use-profiles
           # use-profiles 把导出配置写到文件（本环境路径固定），而非 CM_EXPORT_OPTIONS 变量
           EXPORT_OPTS="${CM_EXPORT_OPTIONS:-/Users/builder/export_options.plist}"
 
-          # Build Number 递增：Apple 拒绝重复 build 号，且重复时常常「上传报成功、
-          # TestFlight 里却看不到构建」，是最难排查的坑。
+          # Build Number 递增：Apple 拒绝重复 build 号。
           # 先查 TestFlight 当前最大值 +1；查不到（首建/网络/权限问题）就退回基线 + 构建次数。
           LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APP_ID" 2>/dev/null || echo "")
           if [ -z "$LATEST" ]; then
@@ -107,7 +75,7 @@ workflows:
             --build-number="$NEW_BUILD" \
             --export-options-plist="$EXPORT_OPTS"
     artifacts:
-      - build/ios/ipa/*.ipa               # 相对 working_directory(im-app)，即 im-app/build/ios/ipa/*.ipa
+      - build/ios/ipa/*.ipa               # 相对 working_directory(im-app-1)，即 im-app-1/build/ios/ipa/*.ipa
     publishing:
       email:
         recipients:
@@ -117,56 +85,10 @@ workflows:
           failure: true
       app_store_connect:
         auth: integration                 # 用上面 integrations 里声明的密钥认证
-        # 只要这段存在，IPA 就会自动上传到 App Store Connect（等价于你手动 ios-uploader 那一步）
-        submit_to_testflight: true        # 额外动作：处理完成后提交 TestFlight Beta 审核
-        # 只想上传、不想自动提 Beta 审核 → 把上面一行改成 false，构建仍会出现，自己去后台点
-        # 2026-11-10 开启「自动提交正式审核」：build 上传后自动附到已建版本并提交 App Store 审核。
-        # 前提（缺一不可，否则发布步骤报错）：
-        #   1. App Store Connect 已为该 App 创建好「准备提交」的版本（版本号填好）；
-        #   2. 该版本的截图/描述/隐私政策/分级等元数据齐全（首次上架要在后台手工配一次）；
-        #   3. ASC API Key 权限 ≥ App Manager。
+        # 只要这段存在，IPA 就会自动上传到 App Store Connect
+        submit_to_testflight: true        # 上传后自动提交 TestFlight Beta 审核
+        # 上传后自动附到「准备提交」的版本并提交 App Store 正式审核。
+        # 前提：ASC 后台该 App(6831744546) 已建好待提交版本且元数据齐全；
+        # 首次元数据没配齐就先改成 false，只传 TestFlight，后台配好再开
         submit_to_app_store: true
         # cancel_previous_submissions: true  # 提审新版时自动撤销旧版待审（可选）
-        # beta_groups:                    # 过了 Beta 审核后自动分发给测试组
-        #   - 内部测试组
-        # expire_build_submitted_for_review: true   # 提交新包时让上一版待审包过期
-
-# —— 备用方案：Settings → Integrations 里死活找不到时，改用环境变量 ——
-# 1. Codemagic 网页 → 进入你的 App → Environment variables → 加 3 个变量（全勾 Secret）：
-#      APP_STORE_CONNECT_ISSUER_ID      = Issuer ID
-#      APP_STORE_CONNECT_KEY_IDENTIFIER = Key ID
-#      APP_STORE_CONNECT_PRIVATE_KEY    = .p8 全文（含 BEGIN/END 两行）
-#    建议存成一个变量组，比如叫 asc_publish。
-# 2. 把上面 workflow 里的 integrations 块删掉，publishing 改成：
-#      publishing:
-#        app_store_connect:
-#          api_key: $APP_STORE_CONNECT_PRIVATE_KEY
-#          key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
-#          issuer_id: $APP_STORE_CONNECT_ISSUER_ID
-#          submit_to_testflight: true
-#    并在 environment 加：groups: [asc_publish]
-# ⚠ 这不会打开自动签名（自动签名靠 fetch-signing-files 命令，本文件没有），
-#    p12 手动签名照旧。
-
-# —— App Store Connect API Key 自动签名（备用，想换回去再启用）——
-# 1. environment 里加回：
-#      groups:
-#        - appstore_credentials
-#    并把 distribution_type 改为 app_store
-# 2. Codemagic 网页 → Teams → Variables 建同名变量组，含 3 个变量：
-#      APP_STORE_CONNECT_ISSUER_ID / APP_STORE_CONNECT_KEY_IDENTIFIER /
-#      APP_STORE_CONNECT_PRIVATE_KEY（.p8 全文，开 Secure 开关）
-# 3. use-profiles 检测到这三个变量即自动向苹果申请/下载证书与描述文件；
-#    需苹果后台先建好对应包名的 App 记录。
-# ⚠ 启用它会顶掉手动 p12 签名，届时 publishing 可改回变量组写法：
-#   publishing:
-#     app_store_connect:
-#       api_key: $APP_STORE_CONNECT_PRIVATE_KEY
-#       key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
-#       issuer_id: $APP_STORE_CONNECT_ISSUER_ID
-#       submit_to_testflight: true
-
-# —— 关于首次上传 ——
-# Apple/Codemagic 都建议「第一个版本手动上传一次」，因为 App 记录、截图、隐私政策
-# 这些只能在网页端配。你已于 2026-09-24 手动传过 1.3.9(13)，这个前置条件已满足，
-# 所以现在接自动上传正好，不会撞上「App 信息不完整导致自动发布失败」。
