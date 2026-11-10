@@ -10,18 +10,22 @@
 #    while flutter_webrtc uses Swift Package Manager"。
 #   修复：每次构建先 `flutter config --no-enable-swift-package-manager`（见下方脚本）。
 #
-# 签名方式：**App Store Connect API Key 自动签名**（2026-11-11 定稿）
-#   构建时 `xcode-project use-profiles` 自动用 ASC 密钥向苹果
-#   申请/下载 App Store 分发证书与描述文件并挂到工程上——
-#   不需要手动上传 .p12 / .mobileprovision（网页 Code signing identities 保持空）。
-#   缺证书时自动新建（Apple 每类分发证书上限 2 个，超限先去 ASC 删旧的）。
+# 签名方式：**手动上传证书 + 描述文件**（2026-11-11 用户定稿，不用自动获取）
+#   1. Codemagic 网页 → Settings → codemagic.yaml settings → Code signing identities 上传：
+#      - .p12 证书（含私钥，苹果后台 iOS Distribution 证书导出）
+#      - .mobileprovision 描述文件 —— 必须 **App Store 类型**、Bundle ID 必须是
+#        com.siqu.chat（错一个字母都签不上）
+#   2. 构建脚本 `xcode-project use-profiles` 优先使用手动上传的证书/描述文件，
+#      匹配不上才回退 ASC API Key 自动获取（integrations 仍保留，仅供
+#      publishing.app_store_connect 上传 IPA 认证用）。
+#   3. 证书/描述文件过期或换包名时，回这个页面重新上传即可，不用改本文件。
 #
 # 前置操作（Codemagic 网页，只需做一次）：
-#   1. developer.apple.com（目标开发者账号）→ 用户和访问 → 集成(App Store Connect API)
-#      → 生成密钥，角色 App Manager，下载 .p8（只此一次），记下 Issuer ID / Key ID
-#   2. Codemagic 网页 → Settings → Integrations → App Store Connect → Connect
-#      填 Issuer ID / Key ID / 上传 .p8，**API key name 必须填 siqu-asc**（与下面 integrations 一字不差）
-#   3. Settings → codemagic.yaml settings → Code signing identities 保持为空（不要传 p12）
+#   developer.apple.com（目标开发者账号）→ 用户和访问 → 集成(App Store Connect API)
+#   → 生成密钥，角色 App Manager，下载 .p8（只此一次），记下 Issuer ID / Key ID
+#   → Codemagic Settings → Integrations → App Store Connect → Connect，
+#     **API key name 必须填 siqu-asc**（与下面 integrations 一字不差）
+#   ——这个集成只用于「构建产物自动上传 App Store Connect」，与签名方式无关。
 
 workflows:
   ios-ipa:
@@ -55,9 +59,10 @@ workflows:
         script: dart run tool/apply_config.dart
         # ⚠ environment.bundle_identifier 与 app_build.json 的 iosPackageName
         #   必须同步改（签名按包名匹配描述文件，错一个字母都签不上）。
-      - name: 挂载自动签名并打包 IPA
+      - name: 挂载签名并打包 IPA
         script: |
-          # 自动签名：用 ASC API Key 申请/下载 app_store 证书+描述文件挂到工程
+          # 手动上传模式：use-profiles 优先用 Code signing identities 里的
+          # .p12 + .mobileprovision（App Store 类型、bundle id com.siqu.chat）
           xcode-project use-profiles
           # use-profiles 把导出配置写到文件（本环境路径固定），而非 CM_EXPORT_OPTIONS 变量
           EXPORT_OPTS="${CM_EXPORT_OPTIONS:-/Users/builder/export_options.plist}"
