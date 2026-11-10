@@ -96,8 +96,12 @@ class _QrLoginPageState extends State<QrLoginPage> {
             setState(() => _status = 2);
             await Future.delayed(const Duration(milliseconds: 500));
             if (mounted) {
-              Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(builder: (_) => const HomeShell()));
+              // 2026-11-11 修复（iOS 右滑穿到登录页）：确认成功后清空整个导航栈，
+              // 不残留登录页（原 pushReplacement 只替换扫码页）。
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const HomeShell()),
+                (route) => false,
+              );
             }
           }
         } else if (status == 'expired') {

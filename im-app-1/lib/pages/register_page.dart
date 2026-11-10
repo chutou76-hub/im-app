@@ -331,8 +331,14 @@ class _RegisterPageState extends State<RegisterPage> {
         }
       }
       if (!mounted) return;
-      Navigator.of(context)
-          .pushReplacement(MaterialPageRoute(builder: (_) => const HomeShell()));
+      // 2026-11-11 修复（iOS 右滑穿到登录页）：原 pushReplacement 只替换注册页，
+      // 登录页仍留在栈底——iOS 侧滑返回手势能把登录页「划出来」（其他二级页
+      // 右滑同理一路回退到登录）。改为 pushAndRemoveUntil 清空整个栈，
+      // 与登录页 _completeLogin 同款导航，登录后不存在可回退的登录/注册页。
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const HomeShell()),
+        (route) => false,
+      );
     } catch (e) {
       _toast(e.toString().replaceFirst('Exception: ', ''));
     } finally {
