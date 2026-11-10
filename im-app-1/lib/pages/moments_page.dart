@@ -99,6 +99,47 @@ class MomentsPageState extends State<MomentsPage> {
   int _notifyTotal = 0;
   bool _notifyLoaded = false;
 
+  // ===== 无限翻页（2026-11-11 修复：广场/同城/好友列表只有 20 条不能上滑翻页）=====
+  /// 已加载页码（从 1 起）；[total] 服务端返回的总条数（hasMore 依据）
+  int _page = 1;
+  int _total = 0;
+  bool _loadingMore = false;
+  bool _hasMore = true;
+
+  /// 无限翻页（2026-11-11）：滚到列表底部附近自动拉下一页追加。
+  /// 防重入（_loadingMore）+ 按 id 去重（防下拉刷新与加载更多并发时重复插入）。
+  Future<void> _loadMore() async {
+    if (_loading || _loadingMore || !_hasMore) return;
+    setState(() => _loadingMore = true);
+    try {
+      final next = _page + 1;
+      final data = widget.userId != null
+          ? await _svc.listByUser(widget.userId!, page: next)
+          : await _svc.list(
+              page: next,
+              scope: _scope,
+              city: _scope == 2 ? _cityName : '',
+              keyword: _keyword);
+      final list = ((data['list'] as List<dynamic>?) ?? [])
+          .map((e) => (e as Map).cast<String, dynamic>())
+          .toList();
+      if (mounted) {
+        setState(() {
+          final seen = _posts.map((p) => '${p['id']}').toSet();
+          for (final p in list) {
+            if (seen.add('${p['id']}')) _posts.add(p);
+          }
+          _page = next;
+          _total = (data['total'] as num?)?.toInt() ?? _total;
+          _hasMore = list.isNotEmpty && _posts.length < _total;
+          _loadingMore = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
   // ===== 2026-11-13 朋友圈内容搜索 =====
   /// 搜索栏是否展开（AppBar 放大镜切换）
   bool _searching = false;
@@ -183,6 +224,10 @@ class MomentsPageState extends State<MomentsPage> {
               .map((e) => (e as Map).cast<String, dynamic>())
               .toList();
           _loading = false;
+          // 2026-11-11 无限翻页：刷新语义=回到第 1 页；hasMore 按服务端 total 判定
+          _page = 1;
+          _total = (data['total'] as num?)?.toInt() ?? _posts.length;
+          _hasMore = _posts.length < _total;
         });
       }
     } catch (_) {
@@ -995,10 +1040,20 @@ class MomentsPageState extends State<MomentsPage> {
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
               onTap: _commentPost != null ? _closeCommentBar : null,
-              child: NotificationListener<ScrollStartNotification>(
-                onNotification: (_) {
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (n) {
                   // 开始拖动列表（含下拉刷新）即收起评论条与键盘
-                  if (_commentPost != null) _closeCommentBar();
+                  if (n is ScrollStartNotification) {
+                    if (_commentPost != null) _closeCommentBar();
+                    return false;
+                  }
+                  // 2026-11-11 无限翻页：滚动更新到距底部 300px 内自动加载下一页
+                  // （_loadMore 内部 _loadingMore 防重入，可安全多次触发）
+                  if (n is ScrollUpdateNotification &&
+                      n.metrics.maxScrollExtent > 0 &&
+                      n.metrics.pixels >= n.metrics.maxScrollExtent - 300) {
+                    _loadMore();
+                  }
                   return false;
                 },
                 child: RefreshIndicator(
@@ -1051,6 +1106,34 @@ class MomentsPageState extends State<MomentsPage> {
                           childCount: _visiblePosts.length,
                         ),
                       ),
+                  // 2026-11-11 无限翻页：加载中转圈 / 没有更多提示（列表尾部）
+                  if (!_loading && _visiblePosts.isNotEmpty && _loadingMore)
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Center(
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
+                      ),
+                    )
+                  else if (!_loading &&
+                      _visiblePosts.isNotEmpty &&
+                      !_hasMore &&
+                      _total > 20)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        child: Center(
+                          child: Text(t('momentsNoMore'),
+                              style: const TextStyle(
+                                  fontSize: 12, color: D2026.text3)),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),

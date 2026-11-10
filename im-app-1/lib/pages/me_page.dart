@@ -30,6 +30,7 @@ import 'data_storage_page.dart';
 import 'device_page.dart';
 import 'edit_profile_page.dart';
 import 'favorites_page.dart';
+import 'invite_promotion_page.dart'; // 邀请推广中心（2026-11-11 需求1，全民邀请码模式）
 import 'login_page.dart';
 import 'my_qr_page.dart';
 import 'notification_settings_page.dart';
@@ -384,6 +385,8 @@ class _MePageState extends State<MePage> {
                       animation: Listenable.merge([
                         FeatureFlags.instance.walletOn,
                         FeatureFlags.instance.inviteOn,
+                        // 邀请码模式变化也要刷新入口行（2026-11-11 需求1）
+                        FeatureFlags.instance.inviteUniversal,
                         // 商城/会员开关（2026-10-05）：后台关闭后入口即时隐藏
                         FeatureFlags.instance.shopOn,
                         FeatureFlags.instance.vipOn,
@@ -477,11 +480,21 @@ class _MePageState extends State<MePage> {
                           _MeRowSpec(
                             fill: AppTheme.green,
                             icon: Icons.share_outlined,
-                            title: t('meInviteCode'),
-                            // 后台关联的邀请码：直接展示 + 整行可点复制
+                            // 2026-11-11 需求1：全民邀请码模式 → 入口改为
+                            // 「邀请推广中心」二级页（推广总金额+邀请好友列表）；
+                            // 指定邀请码模式 → 维持原行为（展示码、点击复制）
+                            title: FeatureFlags.instance.inviteUniversal.value
+                                ? t('meInvitePromotion')
+                                : t('meInviteCode'),
                             subtitle:
-                                _inviteCode.isNotEmpty ? _inviteCode : null,
-                            onTap: _copyInviteCode,
+                                FeatureFlags.instance.inviteUniversal.value
+                                    ? null
+                                    : (_inviteCode.isNotEmpty
+                                        ? _inviteCode
+                                        : null),
+                            onTap: FeatureFlags.instance.inviteUniversal.value
+                                ? _openInvitePromotion
+                                : _copyInviteCode,
                           ),
                       ]),
                     ),
@@ -1245,6 +1258,13 @@ class _MePageState extends State<MePage> {
     } else {
       AppDialogs.toast(context, t('meInviteCodeToast'));
     }
+  }
+
+  /// 全民邀请码模式：跳「邀请推广中心」二级页（2026-11-11 需求1）
+  void _openInvitePromotion() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const InvitePromotionPage()),
+    );
   }
 
   /// 复制 ID（原资料卡片上的复制按钮改挂在副标题行上）

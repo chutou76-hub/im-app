@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../l10n/app_locale.dart';
 import '../services/api_client.dart';
+import '../services/feature_flags.dart';
 import '../services/friend_service.dart';
 import '../services/settings_service.dart';
 import '../theme/app_theme.dart';
@@ -432,7 +433,17 @@ class _EditProfilePageState extends State<EditProfilePage> {
             iconBg: _kIconGreen,
             icon: Icons.person_add_alt_1_outlined,
             title: t('epInviteFriends'),
-            onTap: () => AppDialogs.toast(context, t('epInviteFriends')),
+            // 2026-11-11 需求：复制后台配置的 App 下载地址（/auth/config 下发），
+            // 提示「App下载地址已复制」；未配置时提示先到后台设置
+            onTap: () {
+              final url = FeatureFlags.instance.appDownloadUrl.value.trim();
+              if (url.isEmpty) {
+                AppDialogs.toast(context, t('inviteUrlNotSet'));
+                return;
+              }
+              Clipboard.setData(ClipboardData(text: url));
+              AppDialogs.toast(context, t('inviteUrlCopied'));
+            },
           ),
         ],
       ),

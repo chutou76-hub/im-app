@@ -16,6 +16,17 @@ class FeatureFlags {
   /// 关闭 → 注册页无邀请码输入框、游客直接进入、用户中心不显示我的邀请码
   final ValueNotifier<bool> inviteOn = ValueNotifier<bool>(true);
 
+  /// 邀请码模式（2026-11-11 需求1，/auth/config 下发 inviteMode）：
+  /// universal=全民邀请码（每个用户有独立邀请码）→ 用户中心入口为
+  /// 「邀请推广中心」二级页（推广总金额+邀请好友列表）；
+  /// designated=指定邀请码（默认）→ 维持原「我的邀请码」点击复制。
+  final ValueNotifier<bool> inviteUniversal = ValueNotifier<bool>(false);
+
+  /// App 下载地址（2026-11-11 需求，sys_config app_download_url，/auth/config
+  /// 下发 appDownloadUrl）：App 端「邀请好友」「邀请朋友」点击复制该网址分享。
+  /// 空 = 后台未配置 → 复制时提示未配置。
+  final ValueNotifier<String> appDownloadUrl = ValueNotifier<String>('');
+
   /// 是否开启小助手（2026-09-22 需求2，sys_config assistant_enabled 默认 true）
   /// 关闭 → 通讯录不显示小助手入口（注册不自动添加由服务端短路）
   final ValueNotifier<bool> assistantOn = ValueNotifier<bool>(true);
@@ -58,6 +69,10 @@ class FeatureFlags {
         // 需求3 合并：邀请码展示开关 = 注册开关（inviteCodeOn）
         inviteOn.value =
             j['inviteCodeOn'] != false && j['inviteCodeOn'] != 'false';
+        // 2026-11-11 需求1：邀请码模式（universal=全民邀请码）
+        inviteUniversal.value = '${j['inviteMode'] ?? ''}' == 'universal';
+        // 2026-11-11 需求：App 下载地址（「邀请好友」「邀请朋友」复制分享）
+        appDownloadUrl.value = '${j['appDownloadUrl'] ?? ''}';
         assistantOn.value =
             j['assistantOn'] != false && j['assistantOn'] != 'false';
         channelOn.value =
