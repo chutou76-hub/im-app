@@ -1,0 +1,23 @@
+name: opo_install
+description: >-
+  Opo（opoinstall.com）安装参数 / 一键拉起 的 Flutter 桥接（本项目内部本地插件）。
+  官方没有提供 Flutter 插件，只能自己按原生 SDK 包一层 MethodChannel。
+version: 1.0.0
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+  flutter: '>=3.10.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.imapp.opoinstall
+        pluginClass: OpoInstallPlugin
+      ios:
+        pluginClass: OpoInstallPlugin

@@ -23,3 +23,9 @@
 -keep class com.igexin.** { *; }
 -dontwarn com.getui.**
 -keep class com.getui.** { *; }
+
+# ===== Opo 免填邀请码 SDK（plugins/opo_install/android/libs/OpoInstall_v2.1.0.jar）=====
+# 2026-11-11 新增：Xinstall → openinstall → Opo 迁移时补。Opo 官方 Android 集成
+# 文档明确要求加这条；不开 minify 时这里是空转，一旦以后开启 minifyEnabled 就靠它
+# 兜住（SDK 内部大量反射/JSON 反序列化，被裁剪的表现是激活失败但**不报错**）。
+-keep class com.opoinstall.** { *; }

@@ -47,6 +47,15 @@ class _VideoCallPageState extends State<VideoCallPage> {
 
   String? _remoteUserId;
 
+  /// 2026-11-11 排障：视频图层处于哪个分支（等引擎/无媒体/已就绪+摄像头状态）
+  /// 只记一次变化，避免重绘刷屏。下次日志一眼看出"画面为什么没建"。
+  String _layerMemo = '';
+  void _memoLayer(String s) {
+    if (_layerMemo == s) return;
+    _layerMemo = s;
+    CallDebugLog.instance.log('layers $s');
+  }
+
   /// 取本地化文案（未挂载时回退为 key，避免访问失效 context）
   String _t(String key, [Map<String, String>? params]) =>
       mounted ? AppLocalizations.of(context).t(key, params) : key;
@@ -144,6 +153,13 @@ class _VideoCallPageState extends State<VideoCallPage> {
         return;
       }
       if (!perms.cam && mounted) {
+        // 2026-11-11 修复「接听看不到人，但有声音」：被叫端旧实现只把本地画面
+        // 换成头像占位、并把摄像头按钮整组隐藏——用户没有任何入口把摄像头
+        // 打开，此后每一通视频通话都退化成"只有声音"，对端也就永远收不到
+        // 我们的视频流（对端日志里连 onUserVideoAvailable 都不会出现）。
+        // 这里记录降级原因，并在画面上给出可点的「开启摄像头」入口。
+        CallDebugLog.instance
+            .log('camera permission DENIED → audio-only fallback');
         setState(() {
           _hasCamera = false;
           _cameraOff = true;
@@ -254,6 +270,29 @@ class _VideoCallPageState extends State<VideoCallPage> {
   Future<void> _switchCamera() async {
     setState(() => _flipCam = !_flipCam);
     await CallService.instance.media?.switchCamera();
+  }
+
+  /// 2026-11-11 修复「接听看不到人」：摄像头权限被拒后的显式恢复入口。
+  /// 先重新申请（Android 可二次弹窗）；仍被拒（iOS 首次拒绝即永久）则跳系统
+  /// 设置。回到 App 后用户可再点一次，授权成功即刻重建本地视图并开启预览，
+  /// 对端随即能收到我们的视频流——无需重拨。
+  Future<void> _enableCamera() async {
+    final perms = await CallPermissions.ensureForVideoSplit();
+    CallDebugLog.instance
+        .log('enableCamera retry mic=${perms.mic} cam=${perms.cam}');
+    if (!perms.cam) {
+      await CallPermissions.openSettings();
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _hasCamera = true;
+      _cameraOff = false;
+    });
+    // 视图重建后由引擎在 onViewCreated 里自动 startLocalPreview；
+    // 这里再补一次，覆盖「视图早已存在、只是被占位替换」的情况。
+    final media = CallService.instance.media;
+    if (media != null) await media.setCameraOn(true);
   }
 
   /// 2026-11-13 通话浮窗需求：收起为应用内悬浮窗（媒体在 CallService，
@@ -460,10 +499,16 @@ class _VideoCallPageState extends State<VideoCallPage> {
   /// 2026-11-13 通话浮窗需求：媒体引擎改从 CallService 取（服务层持有）。
   List<Widget> _videoLayers() {
     if (!_enteredRoom || !_engineReady) {
+      _memoLayer('waiting entered=$_enteredRoom engine=$_engineReady');
       return [_statusPlaceholder(_status)];
     }
     final media = CallService.instance.media;
-    if (media == null) return [_statusPlaceholder(_status)];
+    if (media == null) {
+      _memoLayer('media=null');
+      return [_statusPlaceholder(_status)];
+    }
+    _memoLayer(
+        'ready cam=${!_cameraOff && _hasCamera} hasCam=$_hasCamera remote=${_remoteUserId ?? '-'}');
     final localBig = _swapped;
     final localLayer = _videoLayer(media, big: localBig, remote: false);
     final remoteLayer = _videoLayer(media, big: !localBig, remote: true);
@@ -485,8 +530,15 @@ class _VideoCallPageState extends State<VideoCallPage> {
     } else {
       if (_cameraOff || !_hasCamera) {
         content = big
-            ? _statusPlaceholder(_t('videoCallCameraOffLabel'),
-                icon: Icons.videocam_off)
+            ? _statusPlaceholder(
+                _hasCamera
+                    ? _t('videoCallCameraOffLabel')
+                    : _t('videoCallCamDenied'),
+                icon: Icons.videocam_off,
+                // 2026-11-11：权限被拒时给出可点入口，不再让用户无路可走
+                actionLabel: _hasCamera ? null : _t('videoCallCamEnable'),
+                onAction: _hasCamera ? null : _enableCamera,
+              )
             : _pipAvatar();
       } else {
         content = media.localVideo();
@@ -512,7 +564,8 @@ class _VideoCallPageState extends State<VideoCallPage> {
     );
   }
 
-  Widget _statusPlaceholder(String text, {IconData? icon}) {
+  Widget _statusPlaceholder(String text,
+      {IconData? icon, String? actionLabel, VoidCallback? onAction}) {
     return Container(
       color: const Color(0xFF1A1A1A),
       alignment: Alignment.center,
@@ -523,8 +576,23 @@ class _VideoCallPageState extends State<VideoCallPage> {
               color: Colors.white24, size: 64),
           const SizedBox(height: 12),
           Text(text,
+              textAlign: TextAlign.center,
               style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.5), fontSize: 14)),
+          // 2026-11-11：摄像头权限被拒时的恢复入口（点击重新授权/去设置）
+          if (actionLabel != null && onAction != null) ...[
+            const SizedBox(height: 16),
+            OutlinedButton(
+              onPressed: onAction,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+              ),
+              child: Text(actionLabel, style: const TextStyle(fontSize: 13)),
+            ),
+          ],
         ],
       ),
     );
@@ -583,16 +651,18 @@ class _VideoCallPageState extends State<VideoCallPage> {
             _toggleMute,
             active: _muted),
         _ctrlBtn(Icons.call_end, _t('videoCallHangUp'), _hangup, danger: true),
-        // 无摄像头（权限被拒/无设备）时不显示摄像头开关与翻转——点了也没用
-        if (_hasCamera) ...[
-          _ctrlBtn(
-              _cameraOff ? Icons.videocam_off : Icons.videocam,
-              _cameraOff ? _t('videoCallCameraClosed') : _t('videoCallCamera'),
-              _toggleCamera,
-              active: _cameraOff),
+        // 2026-11-11：摄像头按钮不再因「权限被拒」整组隐藏——隐藏后用户
+        // 在通话中没有任何入口把摄像头打开（iOS 一次拒绝即永久）。无摄像头
+        // 时点它走重新授权/去设置，有摄像头时仍是开关。
+        _ctrlBtn(
+            _cameraOff ? Icons.videocam_off : Icons.videocam,
+            _cameraOff ? _t('videoCallCameraClosed') : _t('videoCallCamera'),
+            _hasCamera ? _toggleCamera : _enableCamera,
+            active: _cameraOff),
+        // 无摄像头（权限被拒/无设备）时不显示翻转——点了也没用
+        if (_hasCamera)
           _ctrlBtn(Icons.cameraswitch, _t('videoCallFlip'), _switchCamera,
               active: _flipCam),
-        ],
       ],
     );
   }

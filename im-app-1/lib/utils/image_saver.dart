@@ -66,4 +66,23 @@ class ImageSaver {
     }
     return saver_impl.saveVideoUrl(full);
   }
+
+  /// 2026-11-11：保存内存中的图片字节（推广素材海报合成后落盘）。
+  ///
+  /// 与 [saveNetworkImage] 的区别：字节已经在内存里（RepaintBoundary 截图），
+  /// 不需要再下载。原生端直接写相册；Web 端走分享/下载，字节已有时不需要
+  /// 兜底 url（传空串，web 实现会跳过「新标签页打开」这条兜底并返回 false，
+  /// 不会打开空白页）。
+  ///
+  /// [name] 建议带扩展名（如 `promo_1234.png`），原生端仅作展示，
+  /// Web 端用作下载文件名。
+  static Future<bool> saveBytes(Uint8List bytes, {String name = ''}) async {
+    if (bytes.isEmpty) return false;
+    var fileName = name.trim();
+    if (fileName.isEmpty) {
+      fileName = 'image_${DateTime.now().millisecondsSinceEpoch}.png';
+    }
+    if (!fileName.contains('.')) fileName = '$fileName.png';
+    return saver_impl.saveImageBytes(bytes, fileName, '');
+  }
 }

@@ -251,6 +251,18 @@ class _ContactsPageState extends State<ContactsPage> {
     _load();
   }
 
+  /// 下拉刷新（2026-11-11 需求：通讯录增加下拉刷新）。
+  ///
+  /// 与 [_retryLoad] 的差别：**不置 `_loading`**，否则一下拉整页就被替换成
+  /// 骨架屏（RefreshIndicator 自己的转圈也一起被吃掉，观感像闪了一下）。
+  /// 这里保留旧数据原位，网络回来由 `_load()` 内部 setState 覆盖。
+  /// 搜索态下刷新完必须重算一次过滤结果，否则列表还是刷新前的旧命中。
+  Future<void> _refresh() async {
+    await _load();
+    if (!mounted || !_searching) return;
+    _filter(_searchCtrl.text);
+  }
+
   /// 本地过滤通讯录好友（按昵称 / 账号 / 手机号）
   void _filter(String kw) {
     final q = kw.trim().toLowerCase();
@@ -988,49 +1000,60 @@ class _ContactsPageState extends State<ContactsPage> {
       // 视口参照物：索引条跳转时用它换算「锚点分组头在视口内的 y」
       key: _viewportKey,
       children: [
-        ListView(
-          controller: _listCtrl,
-          padding: EdgeInsets.only(bottom: bottomPad),
-          children: [
-            _funcCard(context, s),
-            if (_msg.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(_msg,
-                    style:
-                        const TextStyle(fontSize: 12, color: AppTheme.success)),
-              ),
-            if (!_searching && _requests.isNotEmpty) ...[
-              _SectionLabel(t(
-                  'contactsFriendRequests', {'count': '${_requests.length}'})),
-              ..._requests.map((r) => _requestTile(r)),
-            ],
-            // 搜索结果仍保留带条数的标题带（好友列表则完全由拼音分组头分段）
-            if (_searching)
-              _SectionLabel(t('contactsSearchResults',
-                  {'count': '${_filteredFriends.length}'})),
-            if (groups.isEmpty)
-              _emptyState(_searching ? Icons.search_off : Icons.group_outlined,
-                  _searching ? t('contactsNoMatch') : t('contactsEmptyFriends'))
-            else ...[
-              ...groupWidgets,
-              // 2026-10-10 需求4（二轮）：好友数量统计显示在最后一个好友后面
-              //（列表尾部居中灰字，搜索态不显示——搜索结果已有带条数标题带）
-              if (!_searching && _friends.isNotEmpty)
+        // 2026-11-11 需求：通讯录下拉刷新（重拉好友 + 申请列表，WS 之外的手动兜底）
+        // 写法与项目内其它列表页一致（blacklist / group_file / chat 等）：
+        // AlwaysScrollable + Bouncing，双端手感统一。
+        RefreshIndicator(
+          onRefresh: _refresh,
+          child: ListView(
+            controller: _listCtrl,
+            // 必须显式给 AlwaysScrollable：内容不满一屏时默认 physics 不可滚动，
+            // RefreshIndicator 收不到 overscroll → 下拉刷新直接失效
+            //（好友很少的新号最容易撞上）
+            physics: const AlwaysScrollableScrollPhysics(
+                parent: BouncingScrollPhysics()),
+            padding: EdgeInsets.only(bottom: bottomPad),
+            children: [
+              _funcCard(context, s),
+              if (_msg.isNotEmpty)
                 Padding(
-                  padding: EdgeInsets.only(top: 14 * s, bottom: 4 * s),
-                  child: Center(
-                    child: Text(
-                      t('contactsFriendsCount',
-                          {'count': '${_friends.length}'}),
-                      style: TextStyle(
-                          fontSize: 12.5 * s,
-                          color: context.cs.onSurfaceVariant),
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(_msg,
+                      style:
+                          const TextStyle(fontSize: 12, color: AppTheme.success)),
+                ),
+              if (!_searching && _requests.isNotEmpty) ...[
+                _SectionLabel(t(
+                    'contactsFriendRequests', {'count': '${_requests.length}'})),
+                ..._requests.map((r) => _requestTile(r)),
+              ],
+              // 搜索结果仍保留带条数的标题带（好友列表则完全由拼音分组头分段）
+              if (_searching)
+                _SectionLabel(t('contactsSearchResults',
+                    {'count': '${_filteredFriends.length}'})),
+              if (groups.isEmpty)
+                _emptyState(_searching ? Icons.search_off : Icons.group_outlined,
+                    _searching ? t('contactsNoMatch') : t('contactsEmptyFriends'))
+              else ...[
+                ...groupWidgets,
+                // 2026-10-10 需求4（二轮）：好友数量统计显示在最后一个好友后面
+                //（列表尾部居中灰字，搜索态不显示——搜索结果已有带条数标题带）
+                if (!_searching && _friends.isNotEmpty)
+                  Padding(
+                    padding: EdgeInsets.only(top: 14 * s, bottom: 4 * s),
+                    child: Center(
+                      child: Text(
+                        t('contactsFriendsCount',
+                            {'count': '${_friends.length}'}),
+                        style: TextStyle(
+                            fontSize: 12.5 * s,
+                            color: context.cs.onSurfaceVariant),
+                      ),
                     ),
                   ),
-                ),
+              ],
             ],
-          ],
+          ),
         ),
         _indexBar(context, s, groups),
       ],

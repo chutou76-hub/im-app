@@ -1,7 +1,7 @@
 name: im_app
 description: "企业内部即时通讯 - 移动端"
 publish_to: 'none'
-version: 2.0.4+34
+version: 2.0.6+36
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -76,6 +76,16 @@ dependencies:
                               # H5 垫片（web_connectivity_shim）直接 import，6.x 老式 web 注册在新
                               # SDK 被跳过，须以垫片替代（7.x web 实现同理，垫片在 main 启动覆盖）
   connectivity_plus_platform_interface: ^2.1.0  # 同上，垫片实现 ConnectivityPlatform 用
+  # 2026-11-11：Xinstall → openinstall → **Opo（opoinstall.com）**。
+  # 最终换成 Opo 的原因：客户账号是 Opo 体系（developer.opoinstall.com /
+  # opopage.com / opoinstallink.com），而 openinstall_flutter_plugin 内置的是
+  # **老版** SDK 3.1.0（com.openinstall.*），两套是不同产品、appKey 不通用，
+  # 初始化必然报「appKey错误」→ decodeInstall fail : INIT_ERROR。
+  # Opo 官方没有 Flutter 插件（pub.dev 搜不到，官网 Flutter 标签页也无真实
+  # .dart 代码），所以本项目自带本地插件 plugins/opo_install/（Android jar +
+  # iOS xcframework 随插件入库，不依赖外网下载）。
+  opo_install:
+    path: plugins/opo_install
 
 dev_dependencies:
   flutter_test:

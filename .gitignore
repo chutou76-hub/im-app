@@ -1,0 +1,95 @@
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+*.log
+
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+pubspec.lock
+*.iml
+
+# Go
+*.exe
+*.test
+*.out
+
+# 环境与密钥
+.env
+.env.local
+*.pem
+*.key
+*.jks
+!*.example
+
+# 文档不上传（README 除外）
+/docs/
+/tool/
+/deploy
+# 设计稿
+/UI/
+/TODO.md
+/tests/
+/scripts/
+/im-pc/preview
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 本地备份目录（保留在磁盘，不入库）
+_backup_*/
+lib_backup_*/
+
+# 临时分析 / 调试输出
+analyze_out*.txt
+analyze_result.txt
+out.txt
+out2.txt
+*.tsbuildinfo
+vite.config.*.timestamp-*.mjs
+dist-new/
+
+# 本地工具状态（记忆 / AI 配置）
+.trae/
+.workbuddy/
+
+# 部署备份产物
+deploy/backups/
+
+# 部署打包产物 / 构建产物（2026-09-01 git 提交甄别）
+deploy/*.zip
+deploy/package/
+im-app/web/*.zip
+im-server/bin/
+im-web/im-web/
+ui_preview_*.jpg
+
+# Electron 打包产物（im-pc 桌面 exe，2026-09-08）
+im-pc/electron/release/
+
+# uni-app 构建产物（im-uniapp 首次入库，2026-09-08）
+im-uniapp/unpackage/
+
+# 参考素材，仅本地保留不入库（2026-09-09）
+im-uniapp-ckao/
+
+# im-convert 编译产物（不上传二进制，本地保留用于部署）
+im-convert/im-convert-linux
+
+# Windows 保留名垃圾文件（误重定向产物）
+/nul
+
+# 构建/压测产物（2026-10-07）：本地构建日志与压测程序二进制，不入库
+im-app/build_log.txt
+im-server/stress_linux
+
+# Android JVM 堆转储（2026-11-11）：每次 OOM/dump 生成一个约 2.8GB 的文件，
+# 误提交会直接把仓库拖垮，一律不入库
+*.hprof
+# 手工打包备份 / 本地构建日志（im-app-1，2026-11-11）
+im-app-1/im-app-1.zip
+im-app-1/build_log.txt

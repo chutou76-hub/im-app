@@ -78,6 +78,19 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Opo 免填邀请码（2026-11-11：Xinstall → openinstall → **Opo**）：
+                 scheme 拉起入口。${OPENINSTALL_SCHEME} 是 Gradle manifestPlaceholders
+                 的替换语法（见 android/app/build.gradle.kts），不是 Flutter 插值。
+                 取值来自 android/gradle.properties 的 OPENINSTALL_SCHEME，
+                 必须与 Opo 后台（developer.opoinstall.com → 应用配置）分配的
+                 scheme 完全一致（不一致的表现：扫码装完 App 能开，但拿不到邀请码）。
+                 未配置时兜底为 "openinstall"（合法 scheme，不会误拉起别人）。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="${OPENINSTALL_SCHEME}"/>
+            </intent-filter>
         </activity>
         <!-- ===== 保活前台服务（flutter_foreground_task，服务名不可改）=====
              Android 14+ 必须声明 foregroundServiceType；
@@ -97,6 +110,16 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- Opo 免填邀请码（2026-11-11：Xinstall → openinstall → **Opo**）：
+             SDK 初始化所需的 appKey。键名固定为 com.opoinstall.APP_KEY，不能改。
+             ⚠️ 老版 openinstall 的键名是 com.openinstall.APP_KEY（少一个 po），
+                两套 SDK 的后端不互通，键名写错/用旧库都会表现为
+                「appKey错误，请登陆 openinstall 查看应用配置」→ INIT_ERROR。
+             值由 app/build.gradle.kts 的 manifestPlaceholders["OPENINSTALL_APPKEY"] 注入，
+             最终来源是 android/gradle.properties 的 OPENINSTALL_APPKEY。 -->
+        <meta-data
+            android:name="com.opoinstall.APP_KEY"
+            android:value="${OPENINSTALL_APPKEY}" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

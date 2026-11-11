@@ -24,6 +24,33 @@
 		<string>????</string>
 		<key>CFBundleVersion</key>
 		<string>$(FLUTTER_BUILD_NUMBER)</string>
+		<!-- Opo 免填邀请码（2026-11-11：Xinstall → openinstall 老版 → **Opo**）：
+		     SDK 初始化用的 iOS appKey。键名固定 com.opoinstall.APP_KEY，不能改。
+		     ⚠️ 老版 openinstall 的键名是 com.openinstall.APP_KEY（少一个 po），
+		        两套 SDK 后端不互通；键名写错 / 仍链旧库的表现是「能装能开、
+		        注册页不填码」，且**不报错**。
+		     2026-11-11 客户二次确认为 vincoi（「AppKey：vincoi，没有 s」）。
+		     Android 侧 android/gradle.properties 的 OPENINSTALL_APPKEY 必须同值。 -->
+		<key>com.opoinstall.APP_KEY</key>
+		<string>vincoi</string>
+		<!-- 免填邀请码（2026-11-11）：一键拉起用的 URL Types。
+		     2026-11-11 客户确认本应用 scheme = vincoi，appKey 同为 vincoi。
+		     必须与 Android 侧 android/gradle.properties 的 OPENINSTALL_SCHEME 完全一致，
+		     且与 Runner.entitlements 的关联域名同属一个 Opo 应用（appKey=vincoi）。
+		     注意：iOS 的 scheme 区分大小写，必须小写 vincoi；
+		     也不要动 tobias 的 siquchat scheme —— pubspec.yaml 顶部的
+		     tobias.url_scheme 依赖它，缺失会导致 pod install 失败。 -->
+		<key>CFBundleURLTypes</key>
+		<array>
+			<dict>
+				<key>CFBundleURLName</key>
+				<string>com.siqu.chat.openinstall</string>
+				<key>CFBundleURLSchemes</key>
+				<array>
+					<string>vincoi</string>
+				</array>
+			</dict>
+		</array>
 		<!-- 出口合规声明：仅使用系统标准加密（HTTPS/TLS），无需 CCATS 文档。
 		     若日后启用自研端到端加密算法，需改为 <true/> 并补充合规材料 -->
 		<key>ITSAppUsesNonExemptEncryption</key>

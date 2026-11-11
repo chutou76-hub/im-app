@@ -37,7 +37,10 @@ workflows:
       app_store_connect: codemagic   # ← 必须和 Codemagic UI 里保存的集成名完全一致
 
     environment:
-      flutter: stable
+      # 2026-11-11：钉死 Flutter 版本，与本地验证版本（3.44.4 stable）保持一致。
+      # 用 latest stable 会随时间漂移，老版 TRTC 插件的 iOS PlatformView
+      # 在新版 Flutter 上渲染行为可能变化（视频黑屏类问题排查变量之一）。
+      flutter: 3.44.4
       xcode: latest
       ios_signing:
         distribution_type: app_store             # TestFlight/上架必须 app_store

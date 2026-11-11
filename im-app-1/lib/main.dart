@@ -24,6 +24,7 @@ import 'services/settings_service.dart';
 import 'services/update_service.dart';
 import 'services/user_cache.dart';
 import 'services/wallet_store.dart';
+import 'services/openinstall_service.dart';
 import 'theme/app_theme.dart';
 import 'utils/web_connectivity_shim.dart';
 import 'widgets/update_dialog.dart';
@@ -73,6 +74,8 @@ Future<void> main() async {
   // 实测高度内存层启动预热（fire-and-forget，几毫秒）：任何入口进聊天页的
   // 首帧 initialScrollOffset 都能用真实高度，避免估算低估导致首帧落点偏上
   unawaited(MsgHeightCache.ensureLoaded());
+  // 2026-11-11：OpenInstall 免填邀请码——尽早初始化并取回首装参数；失败静默不影响启动
+  unawaited(OpenInstallService.instance.init());
   // 需求3：App 后台时 WS 新消息 → 通知栏本地通知（极光只推离线用户）
   // 注意：init 只做插件初始化，不弹权限框；通知权限在登录后
   // （HomeShell.initState → requestPermission）统一申请

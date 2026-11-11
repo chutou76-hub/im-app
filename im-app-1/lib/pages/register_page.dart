@@ -10,6 +10,7 @@ import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/e2ee_service.dart'; // E2EE 注册成功静默建钥（§36）
 import '../services/settings_service.dart';
+import '../services/openinstall_service.dart'; // 2026-11-11 OpenInstall 免填邀请码
 import '../theme/app_theme.dart';
 import '../widgets/agreement_checkbox.dart';
 import '../widgets/app_dialogs.dart';
@@ -93,12 +94,42 @@ class _RegisterPageState extends State<RegisterPage> {
   int _smsLeft = 0;
   Timer? _smsTimer;
 
+  // 2026-11-11 晚：邀请码被自动带入后，输入框下方原本有一行「已自动填入邀请信息」
+  // 小字提示，已按用户要求隐藏（连同伴随的 `_inviteAutoFilled` 标志一并删除）。
+  // 若要恢复：在 `_fillPendingInviteCode` 赋值成功后 setState 置 true，
+  // 并在邀请码 `V2Field` 下方渲染 `if (_inviteAutoFilled) Text(t('regInviteAutoFilled'))`
+  // （词条仍在 l10n 里，未删）。
+
   @override
   void initState() {
     super.initState();
     // 第 1 步就露出的头像预览：先随机挑一张预设，两侧保持同一个选择
     _avatarIndex = DateTime.now().microsecondsSinceEpoch % kV2AvatarAssets.length;
+    // 2026-11-11：OpenInstall 免填邀请码——首装/被拉起时取回的邀请码自动填入，
+    // 用户无需手填（输入框未渲染时也赋值，提交时照样作为 inviteCode 上送）
+    _fillPendingInviteCode(notify: false);
+    // SDK 激活回调可能晚于本页创建（首装参数有网络等待），补一次监听
+    OpenInstallService.instance.pendingInviteCodeNotifier
+        .addListener(_onPendingInviteChanged);
     _load();
+  }
+
+  /// 把待用的邀请码写入输入框（[notify]=false 时用于 initState，直接改字段）
+  void _fillPendingInviteCode({bool notify = true}) {
+    final code = OpenInstallService.instance.pendingInviteCode;
+    if (code.isEmpty) return;
+    if (_inviteCode.text.trim() == code) return;
+    if (notify) {
+      setState(() => _inviteCode.text = code);
+    } else {
+      _inviteCode.text = code;
+    }
+  }
+
+  /// OpenInstall 回调到达（页面已存在）→ 自动填入
+  void _onPendingInviteChanged() {
+    if (!mounted) return;
+    _fillPendingInviteCode();
   }
 
   /// 注册方式（2026-09-22 需求6）：account（账号密码，历史行为）/ phone / email。
@@ -309,6 +340,9 @@ class _RegisterPageState extends State<RegisterPage> {
       );
       await _api.saveToken(r.accessToken);
       await _api.saveRefresh(r.refreshToken);
+      // 2026-11-11：注册成功 → 消费掉 OpenInstall 带进来的邀请码，
+      // 避免同设备后续注册/重装再次复用（本地标记 used）
+      unawaited(OpenInstallService.instance.consume());
       // E2EE（§36）：注册成功后静默建钥/恢复（失败不阻断注册流程）。
       unawaited(E2eeService.instance
           .setupAfterLogin(_password.text.trim()));
@@ -472,6 +506,8 @@ class _RegisterPageState extends State<RegisterPage> {
 
   @override
   void dispose() {
+    OpenInstallService.instance.pendingInviteCodeNotifier
+        .removeListener(_onPendingInviteChanged);
     _username.dispose();
     _password.dispose();
     _confirmPwd.dispose();
@@ -892,18 +928,18 @@ class _RegisterPageState extends State<RegisterPage> {
         inputFormatters: [LengthLimitingTextInputFormatter(20)],
       ),
       SizedBox(height: 22 * s),
-      // 邀请码（2026-09-22 需求3 合并）：仅后台开启「邀请码注册」时显示且必填；
-      // 关闭 → 不渲染输入框（游客侧由服务端 2003 控制是否弹码）
-      if (_inviteRequired) ...[
-        V2Field(
-          controller: _inviteCode,
-          hint: t('regInviteHintRequired'),
-          icon: Icons.card_giftcard_rounded,
-          textInputAction: TextInputAction.done,
-          inputFormatters: [LengthLimitingTextInputFormatter(32)],
-        ),
-        SizedBox(height: 20 * s),
-      ],
+    // 邀请码（2026-09-22 需求3 合并）：仅后台开启「邀请码注册」时显示且必填；
+    // 关闭 → 不渲染输入框（游客侧由服务端 2003 控制是否弹码）
+    if (_inviteRequired) ...[
+      V2Field(
+        controller: _inviteCode,
+        hint: t('regInviteHintRequired'),
+        icon: Icons.card_giftcard_rounded,
+        textInputAction: TextInputAction.done,
+        inputFormatters: [LengthLimitingTextInputFormatter(32)],
+      ),
+      SizedBox(height: 20 * s),
+    ],
       AgreementCheckbox(
         checked: _agreeChecked,
         warn: _agreeWarn,

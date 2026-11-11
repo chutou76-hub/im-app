@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Opo SDK 需要的两项权限（官方 Android 集成文档「App Configuration」要求）。
+  AndroidManifest 会与宿主 App 合并；宿主若已声明同一权限不会重复。
+
+  注意：appKey 的 meta-data（com.opoinstall.APP_KEY）**不在这里声明**，
+  统一由宿主 App 的 AndroidManifest 声明并用 manifestPlaceholders 注入，
+  避免两处各写一份、值不一致时排查困难。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+</manifest>

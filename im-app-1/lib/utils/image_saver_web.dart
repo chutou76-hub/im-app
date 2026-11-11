@@ -27,6 +27,9 @@ Future<bool> saveImageBytes(
     if (await _downloadViaBlob(bytes, fileName)) return true;
   }
   // ③ 新标签页兜底：长按图片选「存储图像」
+  // 2026-11-11：url 为空（内存字节保存，如推广素材海报）时不要走这条兜底——
+  // window.open('') 会打开一个空白页，属于无意义副作用 → 直接返回失败。
+  if (url.trim().isEmpty) return false;
   try {
     html.window.open(url, '_blank');
     return true;

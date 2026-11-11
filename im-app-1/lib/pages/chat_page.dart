@@ -1585,6 +1585,27 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  /// 2026-11-11：会话消息就绪后，把**最近若干条语音**提前下到本地缓存，
+  /// 用户点开时直接播（不再"点了才开始下载"）。气泡渲染时也会补一次预取，
+  /// 这里只是让下载更早开始（进会话即下，而不是等用户滚到/看清那一刻）。
+  /// 服务内部按 url 去重、最多 3 条并发，重复调用无副作用。
+  void _prefetchRecentVoices([int maxN = 30]) {
+    var n = 0;
+    for (var i = _msgs.length - 1; i >= 0 && n < maxN; i--) {
+      final m = _msgs[i];
+      if (m.type != 4 || m.recalled) continue;
+      try {
+        final d = jsonDecode(m.content);
+        final url = d is Map ? (d['url'] as String? ?? '') : '';
+        if (url.isEmpty) continue;
+        VoicePlayerService.instance.prefetch(url);
+        n++;
+      } catch (_) {
+        // 非法 content 直接跳过（不影响其它条）
+      }
+    }
+  }
+
   Future<void> _loadHistory({int retry = 0, bool force = false}) async {
     // 2026-10-07 修「新成员历史限制要进几次才生效」：
     // 现象是首次进群能看到入群前历史、服务端返回后才被截断 —— 因�� **磁盘缓存先直出**
@@ -1634,6 +1655,7 @@ class _ChatPageState extends State<ChatPage> {
           _loading = false;
         });
         _startStick(); // 开启持续贴底（列表已直接显示，无白屏）
+        _prefetchRecentVoices();
       }
     }
     try {
@@ -1797,6 +1819,7 @@ class _ChatPageState extends State<ChatPage> {
             _hasMoreOlder = list.length >= 80;
           });
           _initLastSeqFromHistory();
+          _prefetchRecentVoices();
           // 群置顶点击跳转：滚到目标消息（否则进会话强制贴底）
           // 2026-09-29：改走 _jumpToPinnedMsg（窗口外目标按需取数 + beforeMsgId+1 修复）
           final to = widget.scrollToMsgId;
@@ -3674,16 +3697,17 @@ class _ChatPageState extends State<ChatPage> {
         return;
       }
       if (!perms.cam) {
-        final st = await Permission.camera.status;
-        if (st.isPermanentlyDenied && mounted) {
-          final go = await AppDialogs.confirm(
-            context,
-            title: _t('callPermCamTitle'),
-            message: _t('callPermCamMsg'),
-            confirmText: _t('scanCamOpenSettings'),
-          );
-          if (go == true) await CallPermissions.openSettings();
-        }
+        // 2026-11-11 修复：此前只在 `isPermanentlyDenied` 时弹引导，系统判定为
+        // 普通 denied 时直接 return——用户点「视频通话」毫无反应，误以为功能
+        // 坏了。现在两种状态都给「去设置开启」的入口。
+        if (!mounted) return;
+        final go = await AppDialogs.confirm(
+          context,
+          title: _t('callPermCamTitle'),
+          message: _t('callPermCamMsg'),
+          confirmText: _t('scanCamOpenSettings'),
+        );
+        if (go == true) await CallPermissions.openSettings();
         return;
       }
     } else {
@@ -6412,6 +6436,9 @@ class _VoiceBubble extends StatelessWidget {
     final d = _decode(content);
     final durMs = (d['duration'] as num?)?.toInt() ?? 0;
     final url = (d['url'] as String?) ?? '';
+    // 2026-11-11：气泡一渲染就把语音提前下到本地（服务内部去重 + 并发限流），
+    // 用户真正点击时直接播本地文件，不再"点了才开始下载"。
+    if (url.isNotEmpty) VoicePlayerService.instance.prefetch(url);
     final wave =
         (d['waveform'] as List?)?.map((e) => (e as num).toDouble()).toList() ??
             [];
@@ -6424,11 +6451,26 @@ class _VoiceBubble extends StatelessWidget {
       valueListenable: VoicePlayerService.instance.state,
       builder: (ctx, st, _) {
         final isPlaying = st.msgId == msgId && st.playing;
+        final isLoading = st.msgId == msgId && st.loading;
         final progress = (st.msgId == msgId && st.durationMs > 0)
             ? (st.positionMs / st.durationMs).clamp(0.0, 1.0)
             : 0.0;
         final icon =
             isPlaying ? Icons.graphic_eq_rounded : Icons.play_arrow_rounded;
+        // 2026-11-11 修复「语音条要点好几次才有声音」：点击后、真正出声前是
+        // loading 态，这里显示转圈而不是「播放中」图标——用户看到有反馈就
+        // 不会急着再点（再点会被 toggle 忽略，但仍会以为没反应）。
+        final Widget leadIcon = isLoading
+            ? SizedBox(
+                width: 20,
+                height: 20,
+                child: Padding(
+                  padding: const EdgeInsets.all(2.5),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: fg.withValues(alpha: 0.8)),
+                ),
+              )
+            : Icon(icon, size: 20, color: fg);
         final bars = _WaveBars(
             values: wave, progress: progress, playing: isPlaying, color: fg);
         // 时长文字固定字号不跟随聊天字体档缩放（2026-09-20 溢出修复）：
@@ -6444,10 +6486,10 @@ class _VoiceBubble extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(child: bars),
                 const SizedBox(width: 6),
-                Icon(icon, size: 20, color: fg),
+                leadIcon,
               ]
             : <Widget>[
-                Icon(icon, size: 20, color: fg),
+                leadIcon,
                 const SizedBox(width: 6),
                 Expanded(child: bars),
                 const SizedBox(width: 8),

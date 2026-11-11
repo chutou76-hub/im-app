@@ -208,6 +208,15 @@ class CallService {
   VoidCallback? _wsCancel;
   String _myId = '';
   Timer? _ringTimer;
+
+  /// 2026-11-11 修复：被叫端振铃超时计时器。
+  /// 原因：`_ringTimeoutSec` 此前只服务主叫的 outgoing（_startRingTimeout），
+  /// 被叫端一旦漏收 cancel/reject 信令（断线重连丢帧、对端进程被杀）就会
+  /// 永久停在 `CallPhase.incoming`，之后每一通来电都命中 `_onInvite` 的
+  /// 占线分支被"自动拒接"（线上表现：一拨 0.7s 就被拒绝、且从未进房）。
+  /// 现在给被叫补上同时长的兜底超时，到点只复位本地状态、不发任何信令。
+  Timer? _incomingTimer;
+
   DateTime? _connectedAt;
   int _joinTs = 0; // 自己的 join 时间戳（glare 仲裁参考）
   /// 当前通话对应的 invite 记录 msgId（一通电话一条记录模型）：
@@ -252,6 +261,9 @@ class CallService {
     _wsCancel = null;
     _ringTimer?.cancel();
     _ringTimer = null;
+    // 2026-11-11 修复：解绑监听时同时停掉被叫振铃超时，避免残留计时器
+    _incomingTimer?.cancel();
+    _incomingTimer = null;
     state.value = null;
   }
 
@@ -260,6 +272,10 @@ class CallService {
   Future<void> resetSession() async {
     _ringTimer?.cancel();
     _ringTimer = null;
+    // 2026-11-11 修复：退号/换号一并清被叫振铃超时——否则旧账号残留的计时器
+    // 有可能在新账号同会话来电时触发，把新来电误复位。
+    _incomingTimer?.cancel();
+    _incomingTimer = null;
     // 2026-11-10 对端掉线自动结束：清防抖计时器
     _peerGoneTimer?.cancel();
     _peerGoneTimer = null;
@@ -516,6 +532,9 @@ class CallService {
     String peerAvatar = '',
   }) async {
     config = await ensureConfig();
+    // 2026-11-11 修复：本端另起一通电话时清掉可能残留的被叫振铃超时
+    _incomingTimer?.cancel();
+    _incomingTimer = null;
     // invite 信令必须带【主叫自己】的昵称/头像：
     // 2026-09-17 用户实测：旧实现把 peerName（= 会话对方 = 被叫的名字）当成
     // callerName 塞进信令，被叫 A 的来电页/接听页显示的是 A 自己。
@@ -552,6 +571,9 @@ class CallService {
     String groupAvatar = '',
   }) async {
     config = await ensureConfig();
+    // 2026-11-11 修复：本端另起一通电话时清掉可能残留的被叫振铃超时
+    _incomingTimer?.cancel();
+    _incomingTimer = null;
     final me = UserCache.myProfileData;
     final myName = me?['nickname']?.toString() ?? '';
     final myAvatar = me?['avatar']?.toString() ?? '';
@@ -610,6 +632,10 @@ class CallService {
     final s = state.value;
     if (s == null) return;
     _ringTimer?.cancel();
+    // 2026-11-11 修复：接听后必须立刻停掉被叫超时，否则 45s 后被超时逻辑
+    // 当成「无人接听」把正在进行的通话复位掉。
+    _incomingTimer?.cancel();
+    _incomingTimer = null;
     await _sendSignal(
       convId: s.convId,
       action: CallAction.accept,
@@ -637,6 +663,12 @@ class CallService {
     final s = state.value;
     if (s == null) return;
     _ringTimer?.cancel();
+    // 2026-11-11 修复：用户点拒接时停掉被叫超时（_reset 里也会清，这里显式清
+    // 是为了在 await 发信令期间就断掉超时，避免竞态）
+    _incomingTimer?.cancel();
+    _incomingTimer = null;
+    // 2026-11-11 诊断埋点：区分「用户主动拒接」与「占线自动拒接」（见 _onInvite）
+    CallDebugLog.instance.log('USER reject conv=${s.convId} phase=${s.phase}');
     await _sendSignal(
       convId: s.convId,
       action: CallAction.reject,
@@ -726,6 +758,9 @@ class CallService {
   void _reset() {
     _ringTimer?.cancel();
     _ringTimer = null;
+    // 2026-11-11 修复：被叫振铃超时计时器统一在此清理（所有结束路径都会走 _reset）
+    _incomingTimer?.cancel();
+    _incomingTimer = null;
     // 2026-11-10 对端掉线自动结束：清防抖计时器
     _peerGoneTimer?.cancel();
     _peerGoneTimer = null;
@@ -737,6 +772,11 @@ class CallService {
     _inviteMsgId = '';
     // 2026-11-13 通话浮窗需求：真正结束通话才销毁媒体（含停计时/收浮窗标志）
     _teardownMedia();
+    // 2026-11-11 加固：任何结束路径都收干净铃声/震动，不依赖来电页 dispose——
+    // DUP 续铃的 startRing 是 fire-and-forget（内部 await play() 之后才 arm
+    // 振动计时器），与 cancel/hangup 交错时可能在 dispose→stopRing 之后重新装上。
+    // stopRing 内部先 cancel 振动 timer 再 dispose，幂等，可安全重复调用。
+    SoundService.instance.stopRing();
   }
 
   void _emit(CallEvent e) {
@@ -831,6 +871,10 @@ class CallService {
         : (state.value?.callType ?? sig['callType']?.toString() ?? 'voice');
     final isGroupSig = sig['group'] == true;
 
+    // 2026-11-11 诊断埋点：所有进信令留痕，便于下次一眼定位「谁、何时、发了什么」。
+    CallDebugLog.instance
+        .log('signal IN action=$action conv=$convId from=$senderId');
+
     switch (action) {
       case CallAction.invite:
         // 自己 invite 的 WS 回显/重复帧：msgId 与自己刚发出的 invite 相同。
@@ -915,9 +959,46 @@ class CallService {
     // 非 silent：让服务端把这条新 invite 记录改写为「对方拒绝接听」。
     if (state.value != null) {
       final cur = state.value!;
-      // 同一会话且我是主叫 → 这是自己 invite 的回显/重放（HTTP 响应未返回时
-      // 回显先到，mid 比对兜不住），直接忽略，不发占线拒接。
-      if (cur.isCaller && cur.convId == convId) return;
+      // 同一会话 → 都不是"占线"，绝不能回 reject：
+      // ① 我是主叫时是自己 invite 的回显/重放（HTTP 响应未返回时回显先到，
+      //    msgId 比对兜不住）；② 对方重拨（网络重发/多帧/换类型重拨）。
+      // 2026-11-11 修复：同一会话在振铃中 → 续铃 + 按新 invite 刷新通话类型；
+      // 已接通/其他阶段 → 忽略，避免打断进行中的通话。
+      if (cur.convId == convId) {
+        // 2026-11-11 修复：续上 45s 超时并重播铃声——否则第一通残留的超时会
+        // 到点把正在响的第二通页面清掉，用户再次看到"自动挂断"。
+        CallDebugLog.instance.log('invite DUP conv=$convId phase=${cur.phase}');
+        if (cur.phase == CallPhase.incoming) {
+          // 2026-11-11：重拨可能换了语音/视频类型，来电页与 accept 必须按新 invite
+          // 渲染；这里重建 state（phase 仍 incoming），否则沿用首通的 callType。
+          // 群通话的 peerName/peerAvatar 仍是群名/群头像，故仍取 group* 字段。
+          state.value = CallState(
+            convId: convId,
+            callType: callType,
+            peerName: isGroupSig
+                ? (sig['groupName']?.toString() ??
+                    sig['callerName']?.toString() ??
+                    cur.peerName)
+                : (sig['callerName']?.toString() ?? cur.peerName),
+            peerAvatar: isGroupSig
+                ? (sig['groupAvatar']?.toString() ?? cur.peerAvatar)
+                : (sig['callerAvatar']?.toString() ?? cur.peerAvatar),
+            phase: CallPhase.incoming,
+            isCaller: false,
+            isGroup: isGroupSig,
+            engine: sig['engine']?.toString() ?? cur.engine,
+            callerName: sig['callerName']?.toString() ?? cur.callerName,
+          );
+          _startIncomingTimeout(convId);
+          SoundService.instance.startRing(video: callType == 'video');
+        }
+        return;
+      }
+      // 2026-11-11 诊断埋点：只有跨会话才是真占线，拒接前留痕便于回溯
+      // （此前线上「莫名被拒」无法区分是谁拒的、拒的原因是占线还是用户点拒）。
+      CallDebugLog.instance
+          .log('AUTO-REJECT busy conv=$convId curConv=${cur.convId} '
+              'curPhase=${cur.phase} curIsCaller=${cur.isCaller}');
       _sendSignal(
           convId: convId,
           action: CallAction.reject,
@@ -951,6 +1032,24 @@ class CallService {
         )
       ]);
     }
+    // 2026-11-11 修复：被叫振铃超时兜底（见 _startIncomingTimeout 注释）
+    _startIncomingTimeout(convId);
+  }
+
+  /// 2026-11-11 修复：被叫振铃超时。
+  ///
+  /// 到点**只做本地 `_reset()`，不发任何信令**——若发 reject 会把这条通话
+  /// 记录改写成「对方拒绝接听」（诬告本端拒接）；未接通的收尾由主叫侧
+  /// 45s 的 cancel 负责（服务端把 invite 记录改写为「通话未接通」）。
+  void _startIncomingTimeout(String convId) {
+    _incomingTimer?.cancel();
+    _incomingTimer = Timer(const Duration(seconds: _ringTimeoutSec), () {
+      final s = state.value;
+      if (s != null && s.phase == CallPhase.incoming && s.convId == convId) {
+        CallDebugLog.instance.log('incoming TIMEOUT conv=$convId → reset');
+        _reset();
+      }
+    });
   }
 
   /// 群通话的 join / leave：更新参与人 + 转发媒体引擎（WebRTC mesh 建连/拆除）
@@ -998,6 +1097,8 @@ class CallService {
     String? callerAvatar, // invite 信令主叫头像覆盖
     Map<String, dynamic>? extras, // 群通话/WebRTC 扩展字段
   }) async {
+    // 2026-11-11 诊断埋点：出信令统一留痕（只在此处打一次，各分支不重复打）
+    CallDebugLog.instance.log('signal OUT action=$action silent=$silent');
     try {
       final token = await ApiClient.instance.readToken();
       final r = await ApiClient.instance.dio.post(

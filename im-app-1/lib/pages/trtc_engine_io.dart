@@ -14,6 +14,12 @@ class TrtcEngineImpl implements TrtcEngine {
   bool _inRoom = false;
   int? _localViewId;
 
+  /// 2026-11-11 修复「有声音、没画面」：用户在本地视图创建之前点了开摄像头
+  /// （或进房时视图还没建好），旧实现直接静默 return 且不记任何标记，摄像头
+  /// 就一直不开、对端也永远收不到我们的视频流。这里记住意图，视图/房间就绪
+  /// 后补开一次。
+  bool _pendingPreview = false;
+
   /// 远端成员：userId -> 视频流是否可用（onUserVideoAvailable 驱动）
   final Set<String> _videoAvailable = {};
 
@@ -76,6 +82,8 @@ class TrtcEngineImpl implements TrtcEngine {
           case TRTCCloudListener.onRemoteUserEnterRoom:
             final uid = params['userId']?.toString() ?? '';
             debugPrint('[TRTC] remote user enter: $params');
+            // 2026-11-11 排障：对端是否真的在房间里（与"有没有推视频流"分开看）
+            CallDebugLog.instance.log('remote user enter uid=$uid');
             break;
           case TRTCCloudListener.onUserVideoAvailable:
             // 官方流程：远端视频流可用（available=true）时才调用 startRemoteView，
@@ -84,6 +92,10 @@ class TrtcEngineImpl implements TrtcEngine {
             final available = params['available'] == true;
             debugPrint(
                 '[TRTC] user video available: uid=$uid available=$available');
+            // 2026-11-11 排障：这行是「对方到底有没有推视频」的唯一判据——缺失
+            // 说明对端根本没开摄像头，问题在对端采集，不在本端渲染。
+            CallDebugLog.instance
+                .log('userVideoAvailable uid=$uid available=$available');
             if (uid.isEmpty) break;
             if (available) {
               _videoAvailable.add(uid);
@@ -107,6 +119,11 @@ class TrtcEngineImpl implements TrtcEngine {
             debugPrint('[TRTC] remote user leave: $params');
             break;
           case TRTCCloudListener.onFirstVideoFrame:
+            // 2026-11-11 排障：首帧到达 = 渲染链路真正通了（userId 为空表示本地）
+            final fuid =
+                params is Map ? (params['userId']?.toString() ?? '') : '';
+            CallDebugLog.instance
+                .log('firstVideoFrame uid=${fuid.isEmpty ? 'local' : fuid}');
             debugPrint('[TRTC] first video frame: $params');
             break;
           default:
@@ -155,6 +172,13 @@ class TrtcEngineImpl implements TrtcEngine {
           CallDebugLog.instance.log('startLocalPreview FAIL: $e');
         }
       }
+      // 2026-11-11：进房前已点开摄像头（视图还没创建，setCameraOn 只记了意图）
+      // → 房间与视图都就绪了，这里补开预览，否则摄像头永远不开、对端无画面。
+      CallDebugLog.instance.log(
+          'enterRoom done isVideo=$isVideo localViewId=$_localViewId pendingPreview=$_pendingPreview');
+      if (isVideo && localView is! int && _pendingPreview && _localViewId != null) {
+        await startLocalPreview(_localViewId!);
+      }
       return null;
     } catch (e) {
       CallDebugLog.instance.log('enterRoom EXCEPTION: $e');
@@ -163,10 +187,20 @@ class TrtcEngineImpl implements TrtcEngine {
   }
 
   /// 2026-11-01：进房失败时清理半初始化的 SDK 实例——不清理的话下一通
-  /// enterRoom 会因设备/实例占用异常（官方文档：exitRoom 回调前禁止再次 enterRoom）
+  /// enterRoom 会因设备/实例占用异常（官方文档：exitRoom 回调前禁止再次 enterRoom）。
+  /// 2026-11-11：补等 onExitRoom 回调再销毁（同 exitRoom 修复，iOS AudioUnit 释放）。
   Future<void> _safeExitRoom(TRTCCloud cloud) async {
+    final exited = Completer<int>();
+    cloud.registerListener((type, params) {
+      if (type == TRTCCloudListener.onExitRoom && !exited.isCompleted) {
+        exited.complete(params is num ? params.toInt() : 0);
+      }
+    });
     try { await cloud.stopLocalAudio(); } catch (_) {}
     try { await cloud.exitRoom(); } catch (_) {}
+    try {
+      await exited.future.timeout(const Duration(seconds: 3), onTimeout: () => -1);
+    } catch (_) {}
     try { await TRTCCloud.destroySharedInstance(); } catch (_) {}
     if (identical(_cloud, cloud)) _cloud = null;
   }
@@ -176,16 +210,48 @@ class TrtcEngineImpl implements TrtcEngine {
     CallDebugLog.instance.log('exitRoom (inRoom=$_inRoom)');
     _videoAvailable.clear();
     _remoteViewIds.clear();
-    if (_cloud != null && _inRoom) {
+    // 2026-11-11：退房后本地视图随之销毁，viewId 必须失效——否则下一通在
+    // 新视图创建前会用旧 viewId 开预览，画面挂到一个已销毁的渲染器上，
+    // 表现为「摄像头开了但自己和对端都看不到」。
+    _localViewId = null;
+    _pendingPreview = false;
+    if (_cloud != null) {
+      // 2026-11-11 修复「挂断后对方还有声音」（iOS 实锤）：
+      // 1) 去掉 _inRoom 守卫——只要实例还在就完整退房。此前状态标志不对时
+      //    整个 stopLocalAudio/exitRoom 被跳过，麦克风持续推流，对端一直有声。
+      // 2) 官方要求：exitRoom 必须等 onExitRoom 回调返回后才能销毁实例。
+      //    此前 await exitRoom()（仅代表调用提交）后立即 destroySharedInstance，
+      //    iOS 端 AudioUnit 未释放——通话界面关了声音还在推。现在用 Completer
+      //    等 onExitRoom（3s 超时兜底），再停采集、销毁实例。
+      final cloud = _cloud!;
+      final exited = Completer<int>();
+      // 先补挂监听（进房时已挂过，重复挂幂等），确保能收到退出回调
+      cloud.registerListener((type, params) {
+        if (type == TRTCCloudListener.onExitRoom &&
+            !exited.isCompleted) {
+          final r = params is num ? params.toInt() : 0;
+          exited.complete(r);
+        }
+      });
       try {
-        await _cloud!.stopLocalAudio();
-        await _cloud!.exitRoom();
+        await cloud.exitRoom();
+      } catch (_) {}
+      try {
+        await exited.future
+            .timeout(const Duration(seconds: 3), onTimeout: () => -1);
+      } catch (_) {}
+      CallDebugLog.instance.log('onExitRoom received, stopping audio/destroy');
+      try {
+        await cloud.stopLocalAudio();
+      } catch (_) {}
+      try {
+        await cloud.stopLocalPreview();
+      } catch (_) {}
+      try {
+        await TRTCCloud.destroySharedInstance();
       } catch (_) {}
       _inRoom = false;
-    }
-    if (_cloud != null) {
-      TRTCCloud.destroySharedInstance();
-      _cloud = null;
+      if (identical(_cloud, cloud)) _cloud = null;
     }
   }
 
@@ -214,9 +280,19 @@ class TrtcEngineImpl implements TrtcEngine {
     try {
       if (on) {
         // 必须有业务层设置的小窗 viewId，否则 startLocalPreview(null) 会全屏渲染本地画面
-        if (_localViewId == null) return;
+        if (_localViewId == null) {
+          // 2026-11-11：视图还没创建就静默 return 会让摄像头永远不开——
+          // 记住意图，视图创建/进房后补开（见 localVideoView / enterRoom）。
+          _pendingPreview = true;
+          CallDebugLog.instance.log('cameraOn deferred (no local view yet)');
+          return;
+        }
+        _pendingPreview = true;
+        CallDebugLog.instance
+            .log('cameraOn startLocalPreview viewId=$_localViewId cloud=${_cloud != null}');
         await _cloud?.startLocalPreview(true, _localViewId);
       } else {
+        _pendingPreview = false;
         await _cloud?.stopLocalPreview();
       }
     } catch (_) {}
@@ -235,7 +311,13 @@ class TrtcEngineImpl implements TrtcEngine {
     return TRTCCloudVideoView(
       onViewCreated: (id) {
         _localViewId = id;
+        // 2026-11-11 排障 + 自愈：本地视图创建此前完全没有日志，无法区分
+        // 「视图没建起来（渲染层）」与「视图建了但没开预览（采集层）」。
+        // 已在房间时直接开预览，不再依赖业务层回调时序。
+        CallDebugLog.instance.log(
+            'localVideoView created viewId=$id inRoom=$_inRoom pendingPreview=$_pendingPreview');
         onViewCreated(id);
+        if (_inRoom && _cloud != null) startLocalPreview(id);
       },
     );
   }
@@ -245,6 +327,10 @@ class TrtcEngineImpl implements TrtcEngine {
       {required String userId, required ValueChanged<int> onViewCreated}) {
     return TRTCCloudVideoView(
       onViewCreated: (id) {
+        // 2026-11-11 排障：平台视图创建成功与否是「有声无画面」的关键分界——
+        // 没有这行日志就无法区分「视图没建起来（渲染层）」与「视图建了但没帧（流层）」。
+        CallDebugLog.instance.log(
+            'remoteVideoView created uid=$userId viewId=$id videoAvailable=${_videoAvailable.contains(userId)}');
         _remoteViewIds[userId] = id;
         onViewCreated(id);
         // 若该成员视频流已可用，立即绑定画面
@@ -258,21 +344,51 @@ class TrtcEngineImpl implements TrtcEngine {
   @override
   Future<void> startLocalPreview(int viewId) async {
     _localViewId = viewId;
+    // 2026-11-11 排障：本地预览失败此前静默吞掉（iOS 相机权限被拒/无设备时
+    // 只表现为「看不到人」，日志无痕）。记录调用与结果。
+    CallDebugLog.instance.log('startLocalPreview viewId=$viewId');
+    final cloud = _cloud;
+    if (cloud == null) {
+      // 2026-11-11：旧实现用 `_cloud?.` 空安全调用后照样打 "OK"——日志骗人，
+      // 实际什么都没做，摄像头根本没开、对端永远收不到视频。改为显式跳过并
+      // 记下意图，等房间就绪后补开。
+      _pendingPreview = true;
+      CallDebugLog.instance.log('startLocalPreview SKIP cloud=null (deferred)');
+      return;
+    }
     try {
-      await _cloud?.startLocalPreview(true, viewId);
-    } catch (_) {}
+      await cloud.startLocalPreview(true, viewId);
+      _pendingPreview = true;
+      CallDebugLog.instance.log('startLocalPreview OK viewId=$viewId');
+    } catch (e) {
+      CallDebugLog.instance.log('startLocalPreview FAIL err=$e');
+    }
   }
 
   @override
   Future<void> startRemoteView(String userId, int viewId) async {
     _remoteViewIds[userId] = viewId;
+    // 2026-11-11 排障：startRemoteView 失败此前被 catch(_) 静默吞掉——iOS 上
+    // 「有声无画面」若发生在绑定这一步，日志里完全看不到任何痕迹。改为记录
+    // 调用与结果（含异常），通话页点状态文字即可捞出。
+    CallDebugLog.instance.log('startRemoteView uid=$userId viewId=$viewId');
+    final cloud = _cloud;
+    if (cloud == null) {
+      // 2026-11-11：同 startLocalPreview——`_cloud?.` 空安全调用后照样打 OK 是
+      // 假日志（旧监听器残留时最容易误导排查），显式跳过。
+      CallDebugLog.instance.log('startRemoteView SKIP cloud=null uid=$userId');
+      return;
+    }
     try {
-      await _cloud?.startRemoteView(
+      await cloud.startRemoteView(
         userId,
         TRTCCloudDef.TRTC_VIDEO_STREAM_TYPE_BIG,
         viewId,
       );
-    } catch (_) {}
+      CallDebugLog.instance.log('startRemoteView OK uid=$userId');
+    } catch (e) {
+      CallDebugLog.instance.log('startRemoteView FAIL uid=$userId err=$e');
+    }
   }
 
   @override

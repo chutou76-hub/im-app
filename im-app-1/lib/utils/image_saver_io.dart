@@ -7,6 +7,9 @@ import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 /// 原生端保存：Android/iOS 写入系统相册（原 image_saver.dart 逻辑迁移）。
+///
+/// 2026-11-11：推广素材海报（内存字节）保存复用本函数——
+/// `ImageSaver.saveBytes` 传 `url = ''`，原生端不读 url，无影响。
 Future<bool> saveImageBytes(
     Uint8List? bytes, String fileName, String url) async {
   if (bytes == null || bytes.isEmpty) return false;

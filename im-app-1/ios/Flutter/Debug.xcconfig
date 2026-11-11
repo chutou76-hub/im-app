@@ -1,1 +1,13 @@
 #include "Generated.xcconfig"
+
+// ===== OpenInstall 免填邀请码（2026-11-11：由 Xinstall 换成 OpenInstall）=====
+// 原先为 Xinstall 静态库（libXinstallSDK.a 缺 arm64-simulator 片）加的
+// EXCLUDED_ARCHS[sdk=iphonesimulator*] = arm64 已删除：
+// OpenInstall 通过 CocoaPods 正常分发 ARM slice，保留排除会让 Apple Silicon 的
+// 模拟器完全无法构建；真机与 Codemagic 归档本来就不受这一行影响。
+//
+// 若将来某个 OpenInstall 版本也报
+// "building for iOS Simulator, but linking in object file built for iOS"，
+// 请同时处理两处（缺一不可，只排 pod 层的话 Runner 仍按 arm64 构建）：
+//   1) 本文件与 Release.xcconfig 加回：EXCLUDED_ARCHS[sdk=iphonesimulator*] = arm64
+//   2) Podfile 的 post_install 里对 pods 的 build_settings 做同样的排除
