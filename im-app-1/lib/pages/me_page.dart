@@ -32,6 +32,7 @@ import 'edit_profile_page.dart';
 import 'favorites_page.dart';
 import 'invite_promotion_page.dart'; // 邀请推广中心（2026-11-11 需求1，全民邀请码模式）
 import 'login_page.dart';
+import 'moments_page.dart'; // 我的朋友圈（2026-11-12 需求2：用户中心直达自己动态）
 import 'my_qr_page.dart';
 import 'notification_settings_page.dart';
 import 'privacy_settings_page.dart';
@@ -395,6 +396,13 @@ class _MePageState extends State<MePage> {
                         FeatureFlags.instance.vipOn,
                       ]),
                       builder: (_, __) => _card(s, dark, [
+                        // 我的朋友圈（2026-11-12 需求2）：用户中心直达自己发的动态
+                        _MeRowSpec(
+                          fill: _blue,
+                          icon: Icons.camera_alt_outlined,
+                          title: t('meRowMoments'),
+                          onTap: _openMyMoments,
+                        ),
                         // 完善登录账号（绑手机）：已绑定手机的用户不显示（二十七批需求2）
                         if (!(p?['phone']?.toString() ?? '').trim().isNotEmpty)
                           _MeRowSpec(
@@ -1117,6 +1125,19 @@ class _MePageState extends State<MePage> {
   void _openFavorites() {
     WideLayoutStore.instance
         .openDetail(context, const FavoritesPage(), paneKey: 'favorites');
+  }
+
+  /// 「我的朋友圈」（2026-11-12 需求2）：用户中心直达**自己发的动态列表**。
+  /// 复用 MomentsPage(userId: 我的ID)——与好友资料页看对方朋友圈同构；
+  /// 此前自己想看历史动态只能先进朋友圈再点自己头像，入口太深。
+  /// 全屏 push（不走 openDetail 右栏）：朋友圈页是沉浸式蓝头版式，
+  /// 与 friend_detail/user_profile 两处入口的打开方式保持一致。
+  void _openMyMoments() {
+    final myId = UserCache.myId ?? '';
+    if (myId.isEmpty) return;
+    final name = UserCache.myProfileData?['nickname']?.toString() ?? '';
+    Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => MomentsPage(userId: myId, userName: name)));
   }
 
   void _openAbout() {

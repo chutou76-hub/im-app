@@ -25,6 +25,7 @@ import '../services/conversation_service.dart';
 import '../services/feature_flags.dart';
 import '../services/friend_service.dart'; // 单聊对方客服勾：/user/:id 取 role
 import '../services/local_store.dart';
+import '../services/media_send_queue.dart'; // 媒体发送队列（上传/发送脱离页面生命周期）
 import '../services/msg_height_cache.dart';
 import '../services/user_cache.dart';
 import '../services/vip_store.dart'; // 会员权益缓存（2026-10-06：撤回消息可见）
@@ -433,6 +434,11 @@ class _ChatPageState extends State<ChatPage> {
   // 杜绝「永久转圈」。key = clientMsgId。
   static const Duration _sendWatchdog = Duration(seconds: 15);
   final Map<String, Timer> _watchdogs = {};
+
+  /// 媒体发送队列的订阅回调（initState 注册 / dispose 注销）。
+  /// late final + 方法引用：保证 add/remove 传的是同一个闭包实例。
+  late final void Function(MediaSendSnapshot) _onMediaSnapshot =
+      _handleMediaSnapshot;
 
   bool _loading = true;
   bool _loadFailed = false; // 历史加载最终失败（显示"重新加载"，不再无声空白）
@@ -951,6 +957,9 @@ class _ChatPageState extends State<ChatPage> {
       if (mounted) setState(() {});
     });
     unawaited(_loadE2eeBanner()); // E2EE（2026-09-18）：单聊顶部加密提示
+    // 媒体发送队列（修「上传中返回首页再进会话，图片/视频消息消失」）：
+    // 上传/发送由进程级队列负责，本页只订阅快照画气泡 + 回填结果。
+    MediaSendQueue.instance.addListener(_onMediaSnapshot);
     _scroll.addListener(_onScroll);
     // 聊天设置（背景 / 气泡颜色 / 字号）改动时刷新本页：设置页在本页之上 push，
     // 返回时本 State 不重建，必须自己监听 AppSettings 才能即时生效
@@ -2287,8 +2296,17 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 登记待确认消息到本地发件箱（杀进程后可恢复重发）。
   /// 红包/转账不入库：重发需要支付密码，只能交给用户手动重试（避免明文落盘）。
+  ///
+  /// 注意：图片/视频/语音（type=2/4/5）**不走这里**——它们由
+  /// [MediaSendQueue] 在**上传开始前**就把记录（stage=upload + 本地文件清单）
+  /// 写进发件箱，上传完成后再原地升级为最终 URL（见 media_send_queue.dart）。
   void _trackPending(ChatMsg m) {
     if (m.type == 8 || m.type == 9) return;
+    if (m.type == MessageType.image ||
+        m.type == MessageType.video ||
+        m.type == MessageType.voice) {
+      return; // 媒体消息的落盘由 MediaSendQueue 负责，避免两条路径互相覆盖
+    }
     unawaited(LocalStore.appendOutbox(widget.conv.id, <String, dynamic>{
       'conversationId': widget.conv.id,
       'clientMsgId': m.clientMsgId,
@@ -2309,6 +2327,10 @@ class _ChatPageState extends State<ChatPage> {
   ///   - 已落库的：直接返回原消息 → 回填气泡为 sent（不重复插入）；
   ///   - 没落库的：真正补发一次。
   /// 这样「发送中杀进程」既不丢消息，也不会多发一条。
+  ///
+  /// 媒体消息（图片/视频/语音）分两段：`stage=upload`（还在传文件）绝不能
+  /// 走 sendRaw（content 里没有 URL，会发出一条空媒体消息），必须恢复出
+  /// 「发送中」气泡后接着上传；只有 `stage=send`（URL 已拿到）才能直接重发。
   Future<void> _resumeOutbox() async {
     final items = await LocalStore.loadOutbox(widget.conv.id);
     if (items.isEmpty || !mounted) return;
@@ -2316,6 +2338,10 @@ class _ChatPageState extends State<ChatPage> {
       if (!mounted) return;
       final cmid = it['clientMsgId']?.toString() ?? '';
       if (cmid.isEmpty) continue;
+      if ((it['stage']?.toString() ?? '') == MediaSendQueue.stageUpload) {
+        await _resumeMediaUpload(it, cmid);
+        continue;
+      }
       if (_msgs.any((x) => x.clientMsgId == cmid)) {
         // 本地已经有了（比如上次已经画过气泡）→ 只补发
         if (!_msgs.any(
@@ -2339,6 +2365,9 @@ class _ChatPageState extends State<ChatPage> {
           ));
         });
       }
+      // 队列正在发这条（stage=send，落库请求还没回来）：只补气泡、接着等快照，
+      // 绝不能再 _resendOne 并行打一次 sendRaw（双发窗口）。
+      if (MediaSendQueue.instance.isRunning(cmid)) continue;
       _armWatchdog(cmid);
       _resendOne(cmid, it);
     }
@@ -2491,11 +2520,17 @@ class _ChatPageState extends State<ChatPage> {
       );
 
   /// 服务端成功响应回填：替换本地乐观消息 + 更新 seq + 落缓存 + 终结看门狗。
+  ///
+  /// 数据侧收尾（出箱 / 历史缓存）先做，UI 侧（setState）必须 mounted 才做：
+  /// 页面已销毁时如果先 setState 抛异常，后面的 sendRaw 结果回填与出箱都会
+  /// 被打断，消息就既不在服务端也不在本地（见「上传中返回首页」线上 Bug）。
   void _replaceLocalWithServer(Map<String, dynamic> resp, String clientMsgId,
       {String? e2Plain}) {
     SoundService.instance.playMessageSent(); // 发送成功提示音
     _cancelWatchdog(clientMsgId);
     _untrackPending(clientMsgId);
+    ConversationService.historyCacheAppend(widget.conv.id, resp);
+    if (!mounted) return; // 页面已销毁：不要再碰 State
     setState(() {
       final idx = _msgs.indexWhere((x) => x.clientMsgId == clientMsgId);
       if (idx >= 0) {
@@ -2518,7 +2553,6 @@ class _ChatPageState extends State<ChatPage> {
         _sortMsgs();
       }
     });
-    ConversationService.historyCacheAppend(widget.conv.id, resp);
   }
 
   /// 发送失败：把本地乐观消息标记为 failed（可长按重试）。
@@ -2528,6 +2562,7 @@ class _ChatPageState extends State<ChatPage> {
   void _markLocalFailed(String clientMsgId, {bool transient = true}) {
     _cancelWatchdog(clientMsgId);
     if (!transient) _untrackPending(clientMsgId);
+    if (!mounted) return; // 页面已销毁（如上传中返回首页）：不碰 State
     setState(() {
       final idx = _msgs.indexWhere((x) => x.clientMsgId == clientMsgId);
       if (idx >= 0) _msgs[idx].status = MsgStatus.failed;
@@ -2564,6 +2599,23 @@ class _ChatPageState extends State<ChatPage> {
   void _retry(ChatMsg m) async {
     final i = _msgs.indexOf(m);
     if (i < 0) return;
+    // 媒体消息（图片/视频/语音）如果失败在**上传阶段**，content 里还没有 URL：
+    // 直接 sendRaw 会发出一条空图片/空视频（服务端落库一条打不开的消息）。
+    // 这种只能从发件箱里的本地文件重走上传链路；拿不到本地文件就别发。
+    if (m.type == MessageType.image ||
+        m.type == MessageType.video ||
+        m.type == MessageType.voice) {
+      if (!_mediaContentReady(m)) {
+        final handled = await _retryMediaFromOutbox(m);
+        if (!handled && mounted) {
+          setState(() {
+            _msgs.removeWhere((x) => x.clientMsgId == m.clientMsgId);
+          });
+          _toast(_t('chatMediaRetryUnavailable'));
+        }
+        return;
+      }
+    }
     // 文件消息元数据不完整（缺 object）时禁止重发（2026-09-24）：
     // 后端 buildConvFile 拿不到 object 不会写 conv_files → 消息能发出但
     // 没有 fileId，任何端都无封面、点开「暂不支持播放」。这种半截气泡只能
@@ -2576,6 +2628,7 @@ class _ChatPageState extends State<ChatPage> {
         return;
       }
     }
+    if (!mounted) return;
     setState(() => _msgs[i].status = MsgStatus.sending);
     _armWatchdog(m.clientMsgId);
     _trackPending(m);
@@ -2600,6 +2653,52 @@ class _ChatPageState extends State<ChatPage> {
       if (!mounted) return;
       _markLocalFailed(m.clientMsgId, transient: ApiClient.isTransient(e));
     }
+  }
+
+  /// 媒体消息的 content 是否已含可用 URL（false = 还在上传阶段，禁止直接重发）。
+  static bool _mediaContentReady(ChatMsg m) {
+    if (m.type == MessageType.image) return m.content.trim().isNotEmpty;
+    try {
+      final j = jsonDecode(m.content);
+      if (j is Map) return (j['url']?.toString() ?? '').isNotEmpty;
+    } catch (_) {
+      // 内容不是 JSON：按不可发送处理
+    }
+    return false;
+  }
+
+  /// 媒体消息「上传阶段失败」的重试：拿发件箱里的本地文件重走上传链路。
+  ///
+  /// 返回 true 表示已接管（重新开始上传）；false 表示本地文件已不可用。
+  Future<bool> _retryMediaFromOutbox(ChatMsg m) async {
+    final items = await LocalStore.loadOutbox(widget.conv.id);
+    Map<String, dynamic>? hit;
+    for (final it in items) {
+      if (it['clientMsgId']?.toString() == m.clientMsgId) {
+        hit = it;
+        break;
+      }
+    }
+    if (hit == null) return false;
+    if ((hit['stage']?.toString() ?? '') != MediaSendQueue.stageUpload) {
+      return false; // 记录已是「URL 就绪」态，但气泡 content 没跟上 → 交给调用方处理
+    }
+    final task = _taskFromOutbox(hit);
+    if (task == null) {
+      // 本地文件已不可用（H5 刷新 / 缓存被清）：出箱，让用户重新选择发送
+      await LocalStore.removeOutbox(widget.conv.id, m.clientMsgId);
+      return false;
+    }
+    if (!mounted) return true;
+    final i = _msgs.indexWhere((x) => x.clientMsgId == m.clientMsgId);
+    if (i >= 0) {
+      setState(() {
+        _msgs[i].status = MsgStatus.sending;
+        _msgs[i].uploadProgress = 0;
+      });
+    }
+    MediaSendQueue.instance.start(task);
+    return true;
   }
 
   /// 领取红包（拆红包浮层）/ 确认收款 → 记入零钱（微信交互对齐）
@@ -3382,6 +3481,9 @@ class _ChatPageState extends State<ChatPage> {
       off();
     }
     _wsOffs.clear();
+    // 媒体发送队列退订：任务本身继续跑（消息不能因为离开页面就丢），
+    // 只是不再往已销毁的 State 派发进度/结果。
+    MediaSendQueue.instance.removeListener(_onMediaSnapshot);
     // 看门狗与补拉去抖定时器必须取消：否则页面销毁后仍会触发 setState
     for (final t in _watchdogs.values) {
       t.cancel();
@@ -4233,93 +4335,461 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _sendImages(List<XFile> files) async {
     if (files.isEmpty) return;
-    final clientMsgId = _uuid();
-    try {
-      // 1) 先插占位气泡：上传可能要几十秒，期间用户必须看到「我在发图」
-      final bubble = _localMsg(2, '', clientMsgId, null);
-      setState(() => _msgs.add(bubble));
-      // 看门狗后移（2026-09-24）：多图上传可能几十秒，15s 到点会误置 failed 闪「！」；
-      // 上传挂起由 dio sendTimeout(60s) 兜底。发送 sendRaw 前再 arm。
-      _jumpToLatest();
+    // 占位气泡 + 任务交给进程级队列（见 _startMediaSend / MediaSendQueue）：
+    // 发件箱在**上传开始前**就落盘，上传中返回首页再进会话也能恢复气泡并续传。
+    _startMediaSend(MessageType.image, files, placeholderContent: '');
+  }
 
-      // 2) 逐张上传；单张失败不中断，最后统计。
-      //    微信式进度（2026-09-17）：多图合并为一条 type=2 消息，进度按
-      //    「全部图片字节流水线」聚合回写占位气泡（onSendProgress 只报单张，
-      //    跨张用 doneBytes 累加）。
-      final urls = <String>[];
-      var failed = 0;
-      var doneBytes = 0;
-      var totalBytes = 0;
-      final sizes = <int>[];
-      for (final f in files) {
-        var s = 0;
-        try {
-          s = await f.length();
-        } catch (_) {}
-        sizes.add(s);
-        totalBytes += s;
-      }
-      for (var i = 0; i < files.length; i++) {
-        final f = files[i];
-        try {
-          // H5 适配：uploadXFile 在 Web 读字节、原生走流式（2026-09-16）
-          final up = await ApiClient.instance.uploadXFile(
-            f,
-            f.name.isEmpty ? 'image$i.jpg' : f.name,
-            onSendProgress: (sent, total) => _setUploadProgress(clientMsgId,
-                totalBytes > 0 ? (doneBytes + sent) / totalBytes : 0),
-          );
-          final url = (up['url'] ?? '').toString();
-          if (url.isEmpty) throw Exception('upload failed');
-          urls.add(url);
-        } catch (_) {
-          failed++;
-        }
-        doneBytes += sizes[i];
-      }
-      if (urls.isEmpty) {
-        // 一张都没传上去：撤掉占位气泡，提示重试
-        if (mounted) {
-          _cancelWatchdog(clientMsgId);
+  // ===== 媒体发送（图片 / 视频 / 语音）：本页只画气泡，上传与落库交给队列 =====
+  //
+  // 线上 Bug：「私聊发视频/图片，上传中返回首页再进会话，消息彻底消失」。
+  // 旧实现把「占位气泡 → 上传 → sendRaw」全写在页面 State 的 async 方法里：
+  //   ① 发件箱是上传**结束后**才登记 → 上传的十几秒里没有任何持久化记录，
+  //      重进会话时占位气泡只活在旧 State 的 `_msgs` 内存里，自然「没了」；
+  //   ② 上传结束后的 `setState` 没有 mounted 守卫 → 页面已 dispose 时抛
+  //      `setState() called after dispose()`，异常直接打断后续 `_trackPending`
+  //      与 `sendRaw`，于是**服务端也没有这条消息**（两头皆丢）。
+  // 现在任务由 [MediaSendQueue]（进程级）执行：页面订阅快照画气泡 / 回填结果，
+  // 页面销毁只取消订阅，上传与发送继续跑完。
+
+  /// 插入占位气泡 → 把发送任务交给队列（发件箱在**上传开始前**落盘）。
+  ///
+  /// [bubbleFile] 气泡展示用的 file 元数据（视频需要 name/size/mimeType）；
+  /// [uploadMeta] 上传/续传要用的名字、大小、MIME（语音用，气泡不展示 file）。
+  void _startMediaSend(
+    int type,
+    List<XFile> files, {
+    required String placeholderContent,
+    Map<String, dynamic>? bubbleFile,
+    Map<String, dynamic>? uploadMeta,
+    String? replyTo,
+  }) {
+    if (files.isEmpty) return;
+    final clientMsgId = _uuid();
+    // 气泡只在页面还活着时插；即使已销毁也要把任务交出去（消息不能丢，
+    // 落库后重进会话由历史带回来）。
+    if (mounted) {
+      setState(() {
+        _msgs.add(_localMsg(type, placeholderContent, clientMsgId, replyTo,
+            file: bubbleFile));
+      });
+    }
+    // 看门狗后移（2026-09-24）：大图/大视频上传可能几十秒，15s 到点会误置
+    // failed 闪「！」；上传挂起由 dio sendTimeout(60s) 兜底，等队列推
+    // sending 快照（进入落库阶段）时才 arm。
+    // 注：_jumpToLatest 在 mounted 判断之外是有意的——它内部自带 mounted 守卫，
+    // 但队列任务必须无条件交出去（页面已销毁也不能丢消息）。
+    _jumpToLatest();
+    MediaSendQueue.instance.start(_buildMediaTask(
+      clientMsgId: clientMsgId,
+      type: type,
+      files: files,
+      placeholderContent: placeholderContent,
+      uploadMeta: uploadMeta,
+      replyTo: replyTo,
+    ));
+  }
+
+  /// 构造媒体发送任务（首次发送与中断后重建共用，避免出现两套上传逻辑）。
+  MediaSendTask _buildMediaTask({
+    required String clientMsgId,
+    required int type,
+    required List<XFile> files,
+    required String placeholderContent,
+    Map<String, dynamic>? uploadMeta,
+    String? replyTo,
+  }) {
+    final meta = uploadMeta ?? const <String, dynamic>{};
+    final mediaFiles = <Map<String, dynamic>>[];
+    for (final f in files) {
+      mediaFiles.add(<String, dynamic>{
+        'path': f.path,
+        'name': f.name.isNotEmpty ? f.name : (meta['name']?.toString() ?? ''),
+        'mimeType':
+            (f.mimeType != null && f.mimeType!.isNotEmpty)
+                ? f.mimeType!
+                : (meta['mimeType']?.toString() ?? ''),
+      });
+    }
+    return MediaSendTask(
+      convId: widget.conv.id,
+      clientMsgId: clientMsgId,
+      type: type,
+      replyTo: replyTo,
+      placeholderContent: placeholderContent,
+      placeholderFile: uploadMeta,
+      mediaFiles: mediaFiles,
+      totalCount: files.length,
+      upload: (onProgress) => _uploadMedia(
+        type,
+        files,
+        onProgress,
+        placeholderContent: placeholderContent,
+        uploadMeta: meta,
+      ),
+    );
+  }
+
+  /// 从发件箱记录里的本地文件清单重建 [XFile] 列表（拿不到返回空）。
+  List<XFile> _mediaFilesOf(Map<String, dynamic> item) {
+    // H5：XFile.path 是 blob URL，页面销毁/刷新后不可再读 → 不做续传，
+    // 由调用方按「无法重试」处理（同一次会话内的在途任务不受影响）。
+    if (kIsWeb) return const <XFile>[];
+    final raw = item[MediaSendQueue.kMediaFiles];
+    if (raw is! List) return const <XFile>[];
+    final out = <XFile>[];
+    for (final e in raw) {
+      if (e is! Map) continue;
+      final path = e['path']?.toString() ?? '';
+      if (path.isEmpty) continue;
+      out.add(XFile(
+        path,
+        name: e['name']?.toString() ?? '',
+        mimeType: e['mimeType']?.toString(),
+      ));
+    }
+    return out;
+  }
+
+  /// 本地文件是否仍然存在（H5 一律视为不可用：blob URL 刷新即失效）。
+  ///
+  /// 系统清理缓存后 path 还在、文件却没了 → 若不做这层校验，每次进会话都会
+  /// 自动重试一次上传并失败，发件箱记录永远出不了箱。
+  ///
+  /// 注：[kIsWeb] 分支目前是**防御性**的——调用方 `_taskFromOutbox` 已有
+  /// `files.isEmpty` 早返回，而 `_mediaFilesOf` 在 Web 恒返回空，Web 到不了这里；
+  /// 保留是为了将来放宽 Web 续传时不会漏掉这个判据。
+  static bool _localFileExists(String path) {
+    if (kIsWeb || path.isEmpty) return false;
+    try {
+      return File(path).existsSync();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 用发件箱记录重建任务（进程被杀后进入会话自动续传）。
+  /// 本地文件已不可用时返回 null（调用方按「文件不可用」出箱处理）。
+  MediaSendTask? _taskFromOutbox(Map<String, dynamic> item) {
+    final cmid = item['clientMsgId']?.toString() ?? '';
+    if (cmid.isEmpty) return null;
+    final files = _mediaFilesOf(item);
+    if (files.isEmpty) return null;
+    for (final f in files) {
+      if (!_localFileExists(f.path)) return null;
+    }
+    final file = item['file'] is Map
+        ? (item['file'] as Map).cast<String, dynamic>()
+        : null;
+    return _buildMediaTask(
+      clientMsgId: cmid,
+      type: (item['type'] as num?)?.toInt() ?? MessageType.image,
+      files: files,
+      placeholderContent: item['content']?.toString() ?? '',
+      uploadMeta: file,
+      replyTo: item['replyTo']?.toString(),
+    );
+  }
+
+  /// 队列快照 → 气泡状态（上传进度 / 落库 / 回填 / 失败）。
+  void _handleMediaSnapshot(MediaSendSnapshot s) {
+    if (!mounted || s.convId != widget.conv.id) return;
+    final i = _msgs.indexWhere((x) => x.clientMsgId == s.clientMsgId);
+    switch (s.stage) {
+      case MediaSendStage.uploading:
+        // 进度节流在队列里已做；这里负责转成气泡遮罩
+        _setUploadProgress(s.clientMsgId, s.progress);
+        return;
+      case MediaSendStage.sending:
+        if (i >= 0) {
           setState(() {
-            _msgs.removeWhere((x) => x.clientMsgId == clientMsgId);
+            final m = _msgs[i];
+            if (s.content.isNotEmpty) m.content = s.content;
+            if (s.file != null) m.file = s.file;
+            m.uploadProgress = 1.0;
+            m.status = MsgStatus.sending;
           });
-          _toast(
-              _t('chatImageSendFailed', {'error': _t('chatUploadAllFailed')}));
+          _armWatchdog(s.clientMsgId); // 上传结束、进入落库阶段，恢复 15s 看门狗
         }
         return;
-      }
-
-      // 3) 更新气泡内容为已上传的 URL 组合，然后发送（进度置 1 隐藏遮罩）
-      final joined = urls.join('|');
-      setState(() {
-        final idx = _msgs.indexWhere((x) => x.clientMsgId == clientMsgId);
-        if (idx >= 0) {
-          _msgs[idx].content = joined;
-          _msgs[idx].uploadProgress = 1.0;
+      case MediaSendStage.sent:
+        final resp = s.resp;
+        if (resp == null) return;
+        if (i >= 0) {
+          _replaceLocalWithServer(resp, s.clientMsgId);
+        } else {
+          // 气泡不在（期间被历史刷新/重进页面重建掉了）：按 msgId 去重后补进列表，
+          // 别让这条消息「消失」。
+          final mid = resp['msgId']?.toString() ?? '';
+          final dup = mid.isNotEmpty &&
+              _msgs.any((x) => x.msgId != null && x.msgId == mid);
+          if (!dup) {
+            setState(() {
+              _msgs.add(ChatMsg.fromServer(resp));
+              _sortMsgs();
+            });
+          }
         }
-      });
-      // 登记发件箱：发送中杀进程也能补回（多图 URL 已拿到，重发不会重复上传）
-      final idx = _msgs.indexWhere((x) => x.clientMsgId == clientMsgId);
-      if (idx >= 0) _trackPending(_msgs[idx]);
-      _armWatchdog(clientMsgId); // 上传已结束，发送阶段恢复 15s 看门狗
-      final resp = await _svc.sendRaw(widget.conv.id, 2, joined,
-          clientMsgId: clientMsgId);
-      _replaceLocalWithServer(resp, clientMsgId);
+        if (s.failCount > 0) {
+          // 部分图片上传失败被丢弃：与旧行为一致的提示
+          _toast(_t('chatImagePartialFailed', {
+            'ok': '${s.okCount}',
+            'fail': '${s.failCount}',
+          }));
+        }
+        return;
+      case MediaSendStage.failed:
+        _cancelWatchdog(s.clientMsgId);
+        // 只有「上传阶段就失败、且没有本地文件可重试」才撤气泡（旧行为）；
+        // 落库阶段失败 / 本地文件还在，都保留气泡显示「!」等待重试。
+        final keepBubble = s.uploaded || s.retryable;
+        if (i >= 0) {
+          if (keepBubble) {
+            setState(() => _msgs[i].status = MsgStatus.failed);
+          } else {
+            setState(() =>
+                _msgs.removeWhere((x) => x.clientMsgId == s.clientMsgId));
+          }
+        }
+        _toast(_mediaErrorText(s.type, s.error));
+        return;
+    }
+  }
 
-      // 4) 部分失败的图已丢弃，toast 告知
-      if (mounted && failed > 0) {
-        _toast(_t('chatImagePartialFailed', {
-          'ok': '${urls.length}',
-          'fail': '$failed',
-        }));
+  /// 媒体发送失败文案（图片/文件两套既有 key，业务失败再套一层 l10n key）。
+  String _mediaErrorText(int type, Object? error) {
+    final key = type == MessageType.image
+        ? 'chatImageSendFailed'
+        : 'chatFileSendFailed';
+    final e = error;
+    final String detail;
+    if (e is MediaSendFailure) {
+      detail = _t(e.messageKey);
+    } else if (e == null) {
+      detail = '';
+    } else {
+      detail = _errMsg(e, e.toString());
+    }
+    return _t(key, {'error': detail});
+  }
+
+  /// 按消息类型分发上传（进度回调已聚合为字节维度）。
+  Future<MediaUploadOutcome> _uploadMedia(
+    int type,
+    List<XFile> files,
+    void Function(double) onProgress, {
+    required String placeholderContent,
+    Map<String, dynamic> uploadMeta = const <String, dynamic>{},
+  }) {
+    if (type == MessageType.image) return _uploadImages(files, onProgress);
+    if (type == MessageType.video) {
+      return _uploadVideo(files.first, onProgress, uploadMeta);
+    }
+    if (type == MessageType.voice) {
+      return _uploadVoice(
+          files.first, onProgress, placeholderContent, uploadMeta);
+    }
+    throw const MediaSendFailure('chatFileNotSupported');
+  }
+
+  /// 逐张上传图片，组合 `url1|url2|...`（单张失败不中断，最后统计）。
+  ///
+  /// 进度按「全部图片字节流水线」聚合（onSendProgress 只报单张，
+  /// 跨张用 doneBytes 累加），微信式遮罩一直是单调递增的。
+  Future<MediaUploadOutcome> _uploadImages(
+      List<XFile> files, void Function(double) onProgress) async {
+    final urls = <String>[];
+    var failed = 0;
+    var doneBytes = 0;
+    var totalBytes = 0;
+    final sizes = <int>[];
+    for (final f in files) {
+      var s = 0;
+      try {
+        s = await f.length();
+      } catch (_) {}
+      sizes.add(s);
+      totalBytes += s;
+    }
+    for (var i = 0; i < files.length; i++) {
+      final f = files[i];
+      try {
+        // H5 适配：uploadXFile 在 Web 读字节、原生走流式（2026-09-16）
+        final up = await ApiClient.instance.uploadXFile(
+          f,
+          f.name.isEmpty ? 'image$i.jpg' : f.name,
+          onSendProgress: (sent, total) => onProgress(
+              totalBytes > 0 ? (doneBytes + sent) / totalBytes : 0),
+        );
+        final url = (up['url'] ?? '').toString();
+        if (url.isEmpty) throw Exception('upload failed');
+        urls.add(url);
+      } catch (_) {
+        failed++;
       }
-    } catch (e) {
-      if (mounted) {
-        _markLocalFailed(clientMsgId, transient: ApiClient.isTransient(e));
-        _toast(_t('chatImageSendFailed', {'error': _errMsg(e, e.toString())}));
+      doneBytes += sizes[i];
+    }
+    if (urls.isEmpty) {
+      // 一张都没传上去：交给队列按「可重试失败」处理（气泡留「!」可重点）
+      throw const MediaSendFailure('chatUploadAllFailed');
+    }
+    onProgress(1);
+    return MediaUploadOutcome(urls.join('|'),
+        okCount: urls.length, failCount: failed);
+  }
+
+  /// 上传视频本体 → 抽封面 → 读时长，拼出 content JSON（封面/时长可降级）。
+  Future<MediaUploadOutcome> _uploadVideo(
+    XFile v,
+    void Function(double) onProgress,
+    Map<String, dynamic> meta,
+  ) async {
+    final name =
+        (meta['name']?.toString().isNotEmpty ?? false) ? '${meta['name']}' : 'video.mp4';
+    var size = (meta['size'] as num?)?.toInt() ?? 0;
+    if (size <= 0) {
+      try {
+        size = await v.length();
+      } catch (_) {}
+    }
+    var mime = (meta['mimeType'] ?? '').toString();
+    if (mime.isEmpty) mime = _guessMime(name);
+
+    // 传输层失败直接抛给队列（页面按 _errMsg 展示真实原因，网络类可重试）
+    final up = await ApiClient.instance.uploadXFile(v, name,
+        dir: 'files/',
+        onSendProgress: (sent, total) =>
+            onProgress(total > 0 ? sent / total : 0));
+    final object = (up['object'] ?? '').toString();
+    final url = (up['url'] ?? '').toString();
+    if (object.isEmpty || url.isEmpty) {
+      throw const MediaSendFailure('chatFileNotSupported');
+    }
+
+    // 视频封面 + 时长：抽帧 → 上传 → thumb；时长经 video_player 读元信息。
+    // Web 端插件不支持（H5 无封面无时长，_VideoBubble 占位兜底，可接受）。
+    // 封面/时长失败不影响发送（降级为无封面，接收端深色占位 + 播放键）。
+    var thumbUrl = '';
+    var durationSec = 0;
+    if (!kIsWeb && v.path.isNotEmpty) {
+      try {
+        final thumb = await VideoThumbnail.thumbnailData(
+          video: v.path,
+          imageFormat: ImageFormat.PNG,
+          quality: 60,
+          maxWidth: 480, // 气泡宽约 240 逻辑像素 ×2 倍率
+        );
+        if (thumb != null && thumb.isNotEmpty) {
+          final tu = await ApiClient.instance.uploadBytes(
+              thumb, 'cover_${DateTime.now().millisecondsSinceEpoch}.png',
+              dir: 'files/');
+          thumbUrl = (tu['url'] ?? '').toString();
+        }
+      } catch (_) {
+        // 封面失败不影响发送
+      }
+      try {
+        final c = VideoPlayerController.file(File(v.path));
+        await c.initialize();
+        durationSec = c.value.duration.inSeconds;
+        await c.dispose();
+      } catch (_) {
+        durationSec = 0;
       }
     }
+
+    final content =
+        jsonEncode({'url': url, 'thumb': thumbUrl, 'duration': durationSec});
+    final fileMeta = <String, dynamic>{
+      'object': object,
+      'name': name,
+      'size': size,
+      'mimeType': mime,
+      'url': url,
+      if (thumbUrl.isNotEmpty) 'thumbUrl': thumbUrl,
+      if (durationSec > 0) 'duration': durationSec,
+    };
+    onProgress(1);
+    return MediaUploadOutcome(content, file: fileMeta);
+  }
+
+  /// 上传语音文件，把 url/object 补进占位 JSON
+  /// （content = {"duration","waveform","size","url","object"}）。
+  Future<MediaUploadOutcome> _uploadVoice(
+    XFile f,
+    void Function(double) onProgress,
+    String placeholderContent,
+    Map<String, dynamic> meta,
+  ) async {
+    final rawName = meta['name']?.toString() ?? '';
+    final name = rawName.isEmpty ? 'voice.m4a' : rawName;
+    // 传输层失败直接抛给队列（页面按 _errMsg 展示真实原因，网络类可重试）
+    final up = await ApiClient.instance.uploadXFile(f, name,
+        dir: 'voice/',
+        onSendProgress: (sent, total) =>
+            onProgress(total > 0 ? sent / total : 0));
+    final object = (up['object'] ?? '').toString();
+    final url = (up['url'] ?? '').toString();
+    if (object.isEmpty || url.isEmpty) {
+      throw const MediaSendFailure('chatFileNotSupported');
+    }
+    var content = placeholderContent;
+    try {
+      final j = jsonDecode(placeholderContent);
+      if (j is Map) {
+        final m = Map<String, dynamic>.from(j);
+        m['url'] = url;
+        m['object'] = object;
+        content = jsonEncode(m);
+      }
+    } catch (_) {
+      content = jsonEncode({'url': url, 'object': object});
+    }
+    onProgress(1);
+    return MediaUploadOutcome(content);
+  }
+
+  /// 进页面时恢复「上传被中断」的媒体消息（发件箱 stage=upload）。
+  ///
+  /// 三种情况：
+  ///   ① 任务还在进程里跑（用户只是返回首页又进来）→ 只补气泡 + 继续订进度；
+  ///   ② 任务已不存在但本地文件还在（杀进程后重开）→ 重建任务自动续传；
+  ///   ③ 本地文件已不可用（H5 刷新 / 缓存被清）→ 标记失败并出箱，不留垃圾。
+  ///
+  /// 注意：此阶段 content 里**还没有 URL**，绝不能走 `_resendOne`
+  /// （那会往服务端发一条空图片/空视频消息）。
+  Future<void> _resumeMediaUpload(Map<String, dynamic> item, String cmid) async {
+    final live = MediaSendQueue.instance.snapshotOf(cmid);
+    final type = (item['type'] as num?)?.toInt() ?? MessageType.image;
+    final file = item['file'] is Map
+        ? (item['file'] as Map).cast<String, dynamic>()
+        : null;
+    final content = live?.content ?? (item['content']?.toString() ?? '');
+    // mounted 自带一次校验：这里显式再判一次，避免将来调用方去守卫后静默失效
+    if (mounted && !_msgs.any((x) => x.clientMsgId == cmid)) {
+      setState(() {
+        _msgs.add(ChatMsg(
+          clientMsgId: cmid,
+          senderId: _myUid,
+          type: type,
+          content: content,
+          status: MsgStatus.sending,
+          file: live?.file ?? file,
+          uploadProgress: live?.progress ?? 0,
+          createdAt: DateTime.now().toIso8601String(),
+        ));
+      });
+      _jumpToLatest();
+    }
+    if (MediaSendQueue.instance.isRunning(cmid)) return; // 后续进度/结果会推过来
+    final task = _taskFromOutbox(item);
+    if (task == null) {
+      // 拿不到本地文件：无法续传，出箱并置失败（用户可删除/重发）
+      await LocalStore.removeOutbox(widget.conv.id, cmid);
+      _markLocalFailed(cmid);
+      return;
+    }
+    MediaSendQueue.instance.start(task);
   }
 
   /// 功能 A：+ 面板「文件」→ 选文件 → 上传 → 发送 type=3 文件消息。
@@ -4431,24 +4901,39 @@ class _ChatPageState extends State<ChatPage> {
     if (reuseId != null) {
       clientMsgId = reuseId;
       final i = _msgs.indexWhere((x) => x.clientMsgId == reuseId);
-      if (i >= 0) {
+      // mounted 守卫：大文件上传期间用户可能已退出本页，此时 setState 会抛
+      // 「setState() called after dispose()」并打断后面的登记与 sendRaw。
+      if (mounted && i >= 0) {
         setState(() {
           _msgs[i].content = name;
           _msgs[i].file = meta;
           _msgs[i].uploadProgress = 1.0;
         });
       }
-      // 元数据补齐后才登记发件箱（上传中途被杀不能拿着缺 object 的半截元数据重发）
-      final bi = _msgs.indexWhere((x) => x.clientMsgId == reuseId);
-      if (bi >= 0) _trackPending(_msgs[bi]);
+      // 元数据补齐后才登记发件箱（上传中途被杀不能拿着缺 object 的半截元数据重发）。
+      // 这里**直接用本地构造好的 meta**，不从 _msgs 反读：页面已销毁时那条
+      // 气泡的 file 仍是缺 object 的占位 meta，反读会把一条「点不开的文件」
+      // 写进发件箱，下次进页重发后谁都打不开。
+      // 必须 await：紧接着的 sendRaw 若瞬时失败会立刻 removeOutbox，
+      // 若 append 还在串行链里排队，就会出现「remove 先于 append 落盘」
+      // → 残留一条注定失败、每次进页都重发一次的发件箱记录。
+      await LocalStore.appendOutbox(widget.conv.id, <String, dynamic>{
+        'conversationId': widget.conv.id,
+        'clientMsgId': clientMsgId,
+        'type': MessageType.file,
+        'content': name,
+        'file': meta,
+      });
     } else {
       clientMsgId = _uuid();
       final bubble =
           _localMsg(MessageType.file, name, clientMsgId, null, file: meta);
-      setState(() {
-        _msgs.add(bubble);
-        _jumpToLatest();
-      });
+      if (mounted) {
+        setState(() {
+          _msgs.add(bubble);
+          _jumpToLatest();
+        });
+      }
       _armWatchdog(clientMsgId);
       _trackPending(bubble);
     }
@@ -4459,12 +4944,14 @@ class _ChatPageState extends State<ChatPage> {
     try {
       final resp = await _svc.sendRaw(widget.conv.id, MessageType.file, name,
           clientMsgId: clientMsgId, file: meta);
-      if (!mounted) return;
+      // _replaceLocalWithServer 自带 mounted 守卫（数据侧出箱/落缓存先做）：
+      // 页面已销毁也要把发件箱记录清掉，否则下次进页会白重发一遍。
       _replaceLocalWithServer(resp, clientMsgId);
     } catch (e) {
-      if (!mounted) return;
       _markLocalFailed(clientMsgId, transient: ApiClient.isTransient(e));
-      _toast(_t('chatFileSendFailed', {'error': _errMsg(e, e.toString())}));
+      if (mounted) {
+        _toast(_t('chatFileSendFailed', {'error': _errMsg(e, e.toString())}));
+      }
     }
   }
 
@@ -4509,181 +4996,37 @@ class _ChatPageState extends State<ChatPage> {
         ? v.mimeType!
         : _guessMime(name);
 
-    // 1) 先插占位气泡（微信式进度，上传大视频可能几十秒）：url 空 = 上传中，
-    //    _VideoBubble 渲染深色占位 + 播放键，_wrapUploadProgress 叠进度遮罩
-    final clientMsgId = _uuid();
-    final bubble = _localMsg(
-        MessageType.video,
-        jsonEncode({'url': '', 'thumb': '', 'duration': 0}),
-        clientMsgId,
-        null,
-        file: {'name': name, 'size': size, 'mimeType': mime});
-    setState(() {
-      _msgs.add(bubble);
-      _jumpToLatest();
-    });
-    // 看门狗不在这里 arm：大视频上传+抽帧远超 15s，旧逻辑 15s 到点把 sending
-    // 强制置 failed → 气泡闪「！」；上传挂起由 dio 的 sendTimeout(60s) 兜底，
-    // 超时会走 catch 撤气泡。真正的 15s 看门狗在发送前再 arm。
-
-    // 2) 上传视频本体（带进度回写）
-    Map<String, dynamic> up;
-    try {
-      up = await ApiClient.instance.uploadXFile(v, name,
-          dir: 'files/',
-          onSendProgress: (sent, total) =>
-              _setUploadProgress(clientMsgId, total > 0 ? sent / total : 0));
-    } catch (e) {
-      if (mounted) {
-        _cancelWatchdog(clientMsgId);
-        setState(() => _msgs.removeWhere((x) => x.clientMsgId == clientMsgId));
-        _toast(_t('chatFileSendFailed', {'error': _errMsg(e, e.toString())}));
-      }
-      return;
-    }
-    final object = (up['object'] ?? '').toString();
-    final url = (up['url'] ?? '').toString();
-    if (object.isEmpty || url.isEmpty) {
-      if (mounted) {
-        _cancelWatchdog(clientMsgId);
-        setState(() => _msgs.removeWhere((x) => x.clientMsgId == clientMsgId));
-        _toast(_t('chatFileNotSupported'));
-      }
-      return;
-    }
-
-    // 3) 视频封面 + 时长：抽帧 → 上传 → thumb；时长经 video_player 读元信息。
-    //    Web 端插件不支持（H5 无封面无时长，_VideoBubble 占位兜底，可接受）。
-    //    封面/时长失败不影响发送（降级为无封面，接收端深色占位 + 播放键）。
-    String thumbUrl = '';
-    int durationSec = 0;
-    if (!kIsWeb) {
-      try {
-        final thumb = await VideoThumbnail.thumbnailData(
-          video: v.path,
-          imageFormat: ImageFormat.PNG,
-          quality: 60,
-          maxWidth: 480, // 气泡宽约 240 逻辑像素 ×2 倍率
-        );
-        if (thumb != null && thumb.isNotEmpty) {
-          final tu = await ApiClient.instance.uploadBytes(
-              thumb, 'cover_${DateTime.now().millisecondsSinceEpoch}.png',
-              dir: 'files/');
-          thumbUrl = (tu['url'] ?? '').toString();
-        }
-      } catch (_) {
-        // 封面失败不影响发送
-      }
-      // 时长：video_player 初始化后读 duration（不显示画面，纯元信息）
-      try {
-        final c = VideoPlayerController.file(File(v.path));
-        await c.initialize();
-        durationSec = c.value.duration.inSeconds;
-        await c.dispose();
-      } catch (_) {
-        durationSec = 0;
-      }
-    }
-
-    // 4) 回填占位气泡元数据 → 登记发件箱 → 发送
-    //    （发件箱在**上传完成后**才登记——上传中途杀进程该条不入 outbox，
-    //    与文件消息同设计；登记后杀进程可恢复重发）
-    final content =
-        jsonEncode({'url': url, 'thumb': thumbUrl, 'duration': durationSec});
-    final meta = <String, dynamic>{
-      'object': object,
-      'name': name,
-      'size': size,
-      'mimeType': mime,
-      'url': url,
-      if (thumbUrl.isNotEmpty) 'thumbUrl': thumbUrl,
-      if (durationSec > 0) 'duration': durationSec,
-    };
-    setState(() {
-      final i = _msgs.indexWhere((x) => x.clientMsgId == clientMsgId);
-      if (i >= 0) {
-        _msgs[i].content = content;
-        _msgs[i].file = meta;
-        _msgs[i].uploadProgress = 1.0;
-      }
-    });
-    final bi = _msgs.indexWhere((x) => x.clientMsgId == clientMsgId);
-    if (bi >= 0) _trackPending(_msgs[bi]);
-
-    _armWatchdog(clientMsgId);
-    try {
-      final resp = await _svc.sendRaw(widget.conv.id, MessageType.video,
-          content,
-          clientMsgId: clientMsgId, file: meta);
-      if (!mounted) return;
-      _replaceLocalWithServer(resp, clientMsgId);
-    } catch (e) {
-      if (!mounted) return;
-      _markLocalFailed(clientMsgId, transient: ApiClient.isTransient(e));
-      _toast(_t('chatFileSendFailed', {'error': _errMsg(e, e.toString())}));
-    }
+    // 占位气泡（微信式进度，上传大视频可能几十秒）：url 空 = 上传中，
+    // _VideoBubble 渲染深色占位 + 播放键，_wrapUploadProgress 叠进度遮罩。
+    // 上传/发送由 MediaSendQueue 负责：上传期间返回首页再进会话不会丢消息。
+    _startMediaSend(
+      MessageType.video,
+      <XFile>[v],
+      placeholderContent: jsonEncode({'url': '', 'thumb': '', 'duration': 0}),
+      bubbleFile: {'name': name, 'size': size, 'mimeType': mime},
+      uploadMeta: {'name': name, 'size': size, 'mimeType': mime},
+    );
   }
 
   /// 语音消息发送（type=4）：镜像 [_sendVideoMessage] 的占位→上传→落库三段式。
   /// content 存 JSON {"url","duration","waveform","size"}，服务端零字段改动、零 migration。
+  /// 与图片/视频一致：上传与发送交给 MediaSendQueue，页面销毁不中断。
   Future<void> _sendVoice(VoiceRecorderResult v) async {
     final ext = v.path.contains('.') ? v.path.split('.').last : 'm4a';
     final name =
         'voice_${_myUid}_${DateTime.now().millisecondsSinceEpoch}.$ext';
-    final clientMsgId = _uuid();
-    // 占位气泡：content 先放 duration+waveform（无 url），上传完再补 url
+    // 占位 content：先放 duration+waveform（无 url），上传完再补 url/object
     final placeholder = <String, dynamic>{
       'duration': v.durationMs,
       'waveform': v.waveform,
       'size': v.sizeBytes,
     };
-    final bubble = _localMsg(
-        MessageType.voice, jsonEncode(placeholder), clientMsgId, null);
-    setState(() {
-      _msgs.add(bubble);
-      _jumpToLatest();
-    });
-    // 看门狗后移（2026-09-24）：上传阶段由 dio sendTimeout 兜底，sendRaw 前 arm。
-
-    Map<String, dynamic> up;
-    try {
-      up = await ApiClient.instance.uploadXFile(XFile(v.path), name,
-          dir: 'voice/',
-          onSendProgress: (sent, total) =>
-              _setUploadProgress(clientMsgId, total > 0 ? sent / total : 0));
-    } catch (e) {
-      if (mounted) {
-        _cancelWatchdog(clientMsgId);
-        setState(() => _msgs.removeWhere((x) => x.clientMsgId == clientMsgId));
-        _toast(_t('chatFileSendFailed', {'error': _errMsg(e, e.toString())}));
-      }
-      return;
-    }
-    final object = (up['object'] ?? '').toString();
-    final url = (up['url'] ?? '').toString();
-    if (object.isEmpty || url.isEmpty) {
-      if (mounted) {
-        _cancelWatchdog(clientMsgId);
-        setState(() => _msgs.removeWhere((x) => x.clientMsgId == clientMsgId));
-        _toast(_t('chatFileNotSupported'));
-      }
-      return;
-    }
-    // 拿到 url：补进 content 再 sendRaw 落库 + 回填
-    placeholder['url'] = url;
-    placeholder['object'] = object;
-    _armWatchdog(clientMsgId); // 上传已结束，发送阶段恢复 15s 看门狗
-    try {
-      final resp = await _svc.sendRaw(
-          widget.conv.id, MessageType.voice, jsonEncode(placeholder),
-          clientMsgId: clientMsgId);
-      if (!mounted) return;
-      _replaceLocalWithServer(resp, clientMsgId);
-    } catch (e) {
-      if (!mounted) return;
-      _markLocalFailed(clientMsgId, transient: ApiClient.isTransient(e));
-      _toast(_t('chatFileSendFailed', {'error': _errMsg(e, e.toString())}));
-    }
+    _startMediaSend(
+      MessageType.voice,
+      <XFile>[XFile(v.path, name: name, mimeType: _guessMime(name))],
+      placeholderContent: jsonEncode(placeholder),
+      uploadMeta: {'name': name, 'size': v.sizeBytes, 'mimeType': _guessMime(name)},
+    );
   }
 
   /// 按扩展名猜 MIME（file_picker 不给 MIME，后端靠它算文件分类）。

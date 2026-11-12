@@ -355,6 +355,10 @@ class AppLocalizations {
       // 多图发送：全部上传失败 / 部分上传失败（后者已成功的会照常发出去）
       'chatUploadAllFailed': '图片上传失败，请检查网络后重试',
       'chatImagePartialFailed': '已发送 {ok} 张，{fail} 张上传失败已保留，可重新发送',
+      // 媒体消息上传中断后点「!」重试，但本地原文件已不可用（H5 刷新/缓存被清）
+      'chatMediaRetryUnavailable': '原文件已失效，无法重试，请重新选择发送',
+      // 媒体上传 5 分钟兜底超时（native 抽帧/读时长偶发挂死）
+      'chatMediaUploadTimeout': '上传超时，请检查网络后重试',
       'chatRedPacketCount': '{type} · {count}个',
       'chatRedPacketGone': '红包已被领完',
       'chatRedPacketGreeting': '恭喜发财，大吉大利',
@@ -1001,6 +1005,7 @@ class AppLocalizations {
       'mePrivacyPolicy': '隐私政策',
       'meRowCompleteAccount': '完善登录账号',
       'meRowWallet': '钱包',
+      'meRowMoments': '我的朋友圈',
       'meRowVip': 'VIP会员',
       // 靓号商城 / VIP 购买（2026-10-05）
       'meRowShop': '靓号商城',
@@ -2331,6 +2336,10 @@ class AppLocalizations {
           'Image upload failed, please check network and retry',
       'chatImagePartialFailed':
           'Sent {ok}, {fail} failed to upload and were kept for retry',
+      'chatMediaRetryUnavailable':
+          'The original file is no longer available, please pick it again',
+      'chatMediaUploadTimeout':
+          'Upload timed out, please check your network and retry',
       'chatRedPacketCount': '{type} · {count} packets',
       'chatRedPacketGone': 'Red packet fully claimed',
       'chatRedPacketGreeting': 'Best wishes!',
@@ -3002,6 +3011,7 @@ class AppLocalizations {
       'mePrivacyPolicy': 'Privacy Policy',
       'meRowCompleteAccount': 'Complete your account',
       'meRowWallet': 'Wallet',
+      'meRowMoments': 'My Moments',
       'meRowVip': 'VIP Membership',
       'meRowShop': 'Short ID Shop',
       'meSubShop': 'Buy your favorite short ID with balance, one-time buyout',

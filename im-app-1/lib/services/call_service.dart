@@ -217,8 +217,24 @@ class CallService {
   /// 现在给被叫补上同时长的兜底超时，到点只复位本地状态、不发任何信令。
   Timer? _incomingTimer;
 
+  /// 2026-11-12 修复「B 接了但一直正在连接 / 之后 A 打 B 被自动拒接」：
+  /// 接通后媒体迟迟没进房（TRTC enterRoom 回调丢失、join 卡死）时旧逻辑
+  /// 没有任何兜底——本端永久停在 connected，且 `_onPeerMediaGone` 因
+  /// `_media == null` 直接 return，若再漏收对端 hangup（WS 断线丢帧），
+  /// 状态永远不复位，之后每一通来电都命中 `_onInvite` 的占线分支被
+  /// 「自动拒接」（表现即：A 打 B 秒被拒，B 打 A 却正常——B 作为主叫
+  /// startCall 会直接覆盖旧状态，不受占线影响）。看门狗：接通 25s 后
+  /// `_mediaJoined` 仍为 false 就主动结束本通、把状态机放回 idle。
+  Timer? _connectedStaleTimer;
+
   DateTime? _connectedAt;
   int _joinTs = 0; // 自己的 join 时间戳（glare 仲裁参考）
+  /// 2026-11-13 修复 join 信号双发：被叫侧「页面进房路径」与「服务层
+  /// _autoJoinMedia 兜底路径」都会调 notifyMediaJoined——兜底路径在
+  /// joinMedia 互斥锁下拿到幂等 null（实际进房的是页面），误以为自己
+  /// 进房成功也广播一次，表现为对端一通电话收到两条 join。这里加
+  /// 「每通电话只广播一次」标记，随 _joinTs 一起在新通话/结束时复位。
+  bool _joinSignalSent = false;
   /// 当前通话对应的 invite 记录 msgId（一通电话一条记录模型）：
   /// 主叫取自 invite 发送响应；被叫取自收到的 invite 消息帧。
   /// 结束信令（hangup/cancel/reject）携带它，服务端据此把 invite 记录
@@ -281,6 +297,7 @@ class CallService {
     _peerGoneTimer = null;
     _connectedAt = null;
     _joinTs = 0;
+    _joinSignalSent = false;
     // 2026-11-13 通话浮窗需求：媒体引擎归 CallService 持有，退号时一并销毁
     await _teardownMedia();
     state.value = null;
@@ -356,12 +373,30 @@ class CallService {
   /// 通话页不再自建 CallMedia——统一走这里，媒体生命周期随之归服务层，
   /// 通话页 pop（缩小为悬浮窗）不再触发 leave()。
   /// 返回 false = 引擎不可用（后台未配置 TRTC/WebRTC/LiveKit）。
-  Future<bool> ensureMedia() async {
+  ///
+  /// 2026-11-13 修复「第一次视频通话正常，第二次只有声音没画面」：
+  /// 旧实现「查 _media → await ensureConfig() → 创建」，接听瞬间服务层
+  /// _autoJoinMedia 兜底与通话页 _prepare() 会各调一次，两个调用都在
+  /// await 期间看到 _media==null，各建一个引擎实例，后者覆盖前者——
+  /// 先进房的实例（在发声音）被页面弃用，页面视图绑到没进房的新实例
+  /// 上（trtc_engine_io 日志 localVideoView created inRoom=false），
+  /// 摄像头永远不开、也收不到对端流 → 双向都没画面。改为单飞
+  /// （进行中的创建直接复用）+ await 后复查，保证一通电话只有一个引擎。
+  Future<bool>? _ensureMediaInFlight;
+  Future<bool> ensureMedia() {
+    if (_media != null) return Future.value(true);
+    return _ensureMediaInFlight ??=
+        _doEnsureMedia().whenComplete(() => _ensureMediaInFlight = null);
+  }
+
+  Future<bool> _doEnsureMedia() async {
     if (_media != null) return true;
     final cfg = await ensureConfig();
     if (!(cfg.trtcUsable || cfg.webrtcUsable || cfg.livekitUsable)) {
       return false;
     }
+    // await 期间可能已有别的调用建好引擎（单飞下到不了这里，防御性保留）
+    if (_media != null) return true;
     final m = createCallMedia(engine: cfg.engine, iceServers: cfg.iceServers);
     // 媒体外发信令（WebRTC sdp/ice）经 CallService type=7 透传（原页面接线迁移）
     m.onSignalOut = (sig) => sendMediaSignal(sig);
@@ -426,12 +461,22 @@ class CallService {
     // 2026-11-13 修复：引擎不存在返回明确错误（不再假成功，见 joinMedia 注释）
     if (m == null) return 'call engine unavailable';
     if (_mediaJoined) return null;
-    final err = await m.join(
-      roomId: roomId,
-      myId: myId,
-      isVideo: isVideo,
-      trtcSig: trtcSig,
-    );
+    // 2026-11-12 修复「接通后一直正在连接」：TRTC enterRoom 回调在部分机型
+    // 上会丢失/卡死，旧逻辑 await 永不返回，页面永远停在「正在连接」，
+    // `_joinInFlight` 也被永久占用导致后续重试全部空转。加 20s 超时兜底
+    // （早于服务层 25s 看门狗）：超时返回错误文案，页面展示失败并允许重试。
+    String? err;
+    try {
+      err = await m.join(
+        roomId: roomId,
+        myId: myId,
+        isVideo: isVideo,
+        trtcSig: trtcSig,
+      ).timeout(const Duration(seconds: 20));
+    } catch (e) {
+      CallDebugLog.instance.log('media.join TIMEOUT/EXCEPTION: $e');
+      err = 'media join timeout';
+    }
     if (err == null) _mediaJoined = true;
     return err;
   }
@@ -644,6 +689,8 @@ class CallService {
     );
     _connectedAt = DateTime.now();
     _startSecondsTimer(); // 2026-11-13 通话浮窗需求：计时上移服务层
+    // 2026-11-12：接通后媒体未进房看门狗（见 _armConnectedStaleWatchdog）
+    _armConnectedStaleWatchdog();
     // 2026-11-13 通话浮窗需求（QA 回归修复）：振铃期收起浮窗后接听 → 服务层兜底进房
     unawaited(_autoJoinMedia(s));
     state.value = s.copyWith(phase: CallPhase.connected);
@@ -761,6 +808,9 @@ class CallService {
     // 2026-11-11 修复：被叫振铃超时计时器统一在此清理（所有结束路径都会走 _reset）
     _incomingTimer?.cancel();
     _incomingTimer = null;
+    // 2026-11-12 修复：接通后媒体未进房看门狗统一在此清理（所有结束路径都会走 _reset）
+    _connectedStaleTimer?.cancel();
+    _connectedStaleTimer = null;
     // 2026-11-10 对端掉线自动结束：清防抖计时器
     _peerGoneTimer?.cancel();
     _peerGoneTimer = null;
@@ -769,6 +819,7 @@ class CallService {
     participants.value = const [];
     mediaSignalHandler = null;
     _joinTs = 0;
+    _joinSignalSent = false;
     _inviteMsgId = '';
     // 2026-11-13 通话浮窗需求：真正结束通话才销毁媒体（含停计时/收浮窗标志）
     _teardownMedia();
@@ -789,8 +840,16 @@ class CallService {
   /// - 被叫/群成员广播 join（房间内已有成员向其发 WebRTC offer；TRTC 用于成员列表）
   /// - 单聊主叫不需要广播（主叫收到被叫 join 后主动 offer）
   Future<void> notifyMediaJoined() async {
+    // 2026-11-12 修复：真实进房成功 → 解除接通看门狗（在一切早退分支之前）
+    _connectedStaleTimer?.cancel();
+    _connectedStaleTimer = null;
     final s = state.value;
     if (s == null) return;
+    // 2026-11-13 修复双发：检查+置位必须是同步的（两条路径间隔仅几毫秒，
+    // 都在 _sendSignal 的 await 之前到达）。置位提前到发送前，宁可牺牲
+    // 「发送失败重试」也不容忍对端重复收到 join。
+    if (_joinSignalSent) return;
+    _joinSignalSent = true;
     _joinTs = DateTime.now().millisecondsSinceEpoch;
     if (s.isCaller && !s.isGroup) return;
     final me = UserCache.myProfileData;
@@ -895,6 +954,8 @@ class CallService {
             _ringTimer?.cancel();
             _connectedAt = DateTime.now();
             _startSecondsTimer(); // 2026-11-13 通话浮窗需求：计时上移服务层
+            // 2026-11-12：接通后媒体未进房看门狗（见 _armConnectedStaleWatchdog）
+            _armConnectedStaleWatchdog();
             // 2026-11-13 通话浮窗需求（QA 回归修复）：振铃期收起浮窗 → 服务层兜底进房
             unawaited(_autoJoinMedia(s.copyWith(phase: CallPhase.connected)));
             state.value = s.copyWith(phase: CallPhase.connected);
@@ -905,6 +966,8 @@ class CallService {
         _ringTimer?.cancel();
         _connectedAt = DateTime.now();
         _startSecondsTimer(); // 2026-11-13 通话浮窗需求：计时上移服务层
+        // 2026-11-12：接通后媒体未进房看门狗（见 _armConnectedStaleWatchdog）
+        _armConnectedStaleWatchdog();
         // 2026-11-13 通话浮窗需求（QA 回归修复）：振铃期收起浮窗 → 服务层兜底进房
         unawaited(_autoJoinMedia(s.copyWith(phase: CallPhase.connected)));
         state.value = s.copyWith(phase: CallPhase.connected);
@@ -1047,6 +1110,37 @@ class CallService {
       final s = state.value;
       if (s != null && s.phase == CallPhase.incoming && s.convId == convId) {
         CallDebugLog.instance.log('incoming TIMEOUT conv=$convId → reset');
+        _reset();
+      }
+    });
+  }
+
+  /// 2026-11-12 修复：接通后媒体未进房看门狗（见 _connectedStaleTimer 注释）。
+  /// 在「双方进入 connected」的三个入口统一武装：被叫 accept()、主叫收
+  /// accept 信令（单聊/群通话两分支）。进房成功（notifyMediaJoined）或
+  /// 任何结束路径（_reset）都会解除。到点媒体仍未进房：
+  /// - 单聊：best-effort 发 hangup（服务端把 invite 记录改写为最终态），
+  ///   并广播 hangup 事件让全屏通话页/浮窗统一收尾；
+  /// - 群通话：只本地复位（其他成员继续，不打断群通话）。
+  void _armConnectedStaleWatchdog() {
+    _connectedStaleTimer?.cancel();
+    _connectedStaleTimer = Timer(const Duration(seconds: 25), () async {
+      final s = state.value;
+      if (s == null || s.phase != CallPhase.connected || _mediaJoined) return;
+      CallDebugLog.instance.log(
+          'CONNECTED STALE (media not joined) conv=${s.convId} → auto end');
+      if (!s.isGroup) {
+        final dur = _elapsedSec();
+        _connectedAt = null;
+        await _sendSignal(
+          convId: s.convId,
+          action: CallAction.hangup,
+          callType: s.callType,
+          duration: dur,
+        );
+        _reset();
+        _emit(CallEvent(CallAction.hangup, s.convId, duration: dur));
+      } else {
         _reset();
       }
     });

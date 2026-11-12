@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -548,6 +549,32 @@ class LocalStore {
   static const String _outboxKey = 'outbox';
   static const int maxOutboxPerConv = 20; // 每会话最多保留的待确认条数（防异常堆积）
 
+  /// outbox 读-改-写串行链。
+  ///
+  /// 为什么必须有：`appendOutbox`/`removeOutbox` 都是「读全量 map → 改 → 写回」。
+  /// 媒体发送队列里 `start()` 对每条消息都会 `unawaited(appendOutbox(...))`，
+  /// 一次选 10 个视频就是 10 次并发调用——它们都停在 `await box.get`，然后各自
+  /// 用**自己读到的那份旧 map** 覆盖写回，后写覆盖先写 → 有记录根本没落盘，
+  /// 此时杀进程就真的丢消息（正是本 Bug 要防的场景）。
+  /// 把「读-改-写」整段串到同一条 Future 链上，保证互斥且顺序原子。
+  static Future<void> _outboxChain = Future<void>.value();
+
+  /// 把一段 outbox 写入操作排到串行链末尾，返回**它自己的**结果 Future。
+  ///
+  /// 链上吞掉异常继续往下走（一次失败不能让后续写全部断掉），但异常会原样
+  /// 抛给调用方（语义与不串行时一致，`await` 的调用方仍能感知失败）。
+  static Future<T> _serialized<T>(Future<T> Function() op) {
+    final completer = Completer<T>();
+    _outboxChain = _outboxChain.then((_) async {
+      try {
+        completer.complete(await op());
+      } catch (e, st) {
+        completer.completeError(e, st);
+      }
+    });
+    return completer.future;
+  }
+
   static Future<Map<String, List<Map<String, dynamic>>>>
       _loadOutboxMap() async {
     final box = _metaBox;
@@ -583,58 +610,87 @@ class LocalStore {
     }
   }
 
-  /// 取某会话的待确认消息（按插入顺序）
-  static Future<List<Map<String, dynamic>>> loadOutbox(String convId) async {
-    if (convId.isEmpty) return const <Map<String, dynamic>>[];
-    return (await _loadOutboxMap())[convId] ?? const <Map<String, dynamic>>[];
-  }
-
-  /// 登记一条待确认消息（按 clientMsgId 幂等，重复登记不新增）
-  static Future<void> appendOutbox(
-      String convId, Map<String, dynamic> item) async {
-    if (convId.isEmpty || _disabled.contains(_outboxKey)) return;
-    final cm = item['clientMsgId']?.toString() ?? '';
-    if (cm.isEmpty) return;
-    try {
-      final all = await _loadOutboxMap();
-      final list = all[convId] ?? <Map<String, dynamic>>[];
-      for (final x in list) {
-        if (x['clientMsgId']?.toString() == cm) return; // 已在箱
-      }
-      list.add(Map<String, dynamic>.from(item));
-      if (list.length > maxOutboxPerConv) {
-        list.removeRange(0, list.length - maxOutboxPerConv);
-      }
-      all[convId] = list;
-      await _metaBox?.put(_outboxKey, jsonEncode(all));
-      _failures.remove(_outboxKey);
-    } catch (e) {
-      _noteFailure(_outboxKey, 'write error: $e');
+  /// 取某会话的待确认消息（按插入顺序）。
+  ///
+  /// 也走串行链：保证读到的是「所有已排队写入都落盘之后」的最新状态
+  /// （否则重试/恢复可能读到写之前的旧快照，误判「记录不存在」）。
+  static Future<List<Map<String, dynamic>>> loadOutbox(String convId) {
+    if (convId.isEmpty) {
+      return Future<List<Map<String, dynamic>>>.value(
+          const <Map<String, dynamic>>[]);
     }
+    return _serialized<List<Map<String, dynamic>>>(() async {
+      final all = await _loadOutboxMap();
+      return all[convId] ?? const <Map<String, dynamic>>[];
+    });
   }
 
-  /// 移除一条已确认 / 已放弃的待发消息
-  static Future<void> removeOutbox(String convId, String clientMsgId) async {
+  /// 登记一条待确认消息（按 clientMsgId 幂等，重复登记不新增）。
+  ///
+  /// [overwrite] = true 时用新内容**覆盖**同 clientMsgId 的旧记录：
+  /// 媒体消息（图片/视频/语音）上传完成后要把占位记录升级成最终 URL，
+  /// 且必须原地升级——先删再写会在两步之间留下「既不在箱也未落库」的空窗，
+  /// 进程恰好那时被杀就彻底丢消息（见 MediaSendQueue）。
+  ///
+  /// 整段「读-改-写」串行进 [_serialized]，并发调用不会互相覆盖。
+  static Future<void> appendOutbox(
+      String convId, Map<String, dynamic> item,
+      {bool overwrite = false}) {
+    if (convId.isEmpty || _disabled.contains(_outboxKey)) {
+      return Future<void>.value();
+    }
+    final cm = item['clientMsgId']?.toString() ?? '';
+    if (cm.isEmpty) return Future<void>.value();
+    return _serialized<void>(() async {
+      try {
+        final all = await _loadOutboxMap();
+        final list = all[convId] ?? <Map<String, dynamic>>[];
+        for (var i = 0; i < list.length; i++) {
+          if (list[i]['clientMsgId']?.toString() == cm) {
+            if (!overwrite) return; // 已在箱：幂等跳过
+            list[i] = Map<String, dynamic>.from(item); // 升级内容（上传完成 → 最终 URL）
+            await _metaBox?.put(_outboxKey, jsonEncode(all));
+            _failures.remove(_outboxKey);
+            return;
+          }
+        }
+        list.add(Map<String, dynamic>.from(item));
+        if (list.length > maxOutboxPerConv) {
+          list.removeRange(0, list.length - maxOutboxPerConv);
+        }
+        all[convId] = list;
+        await _metaBox?.put(_outboxKey, jsonEncode(all));
+        _failures.remove(_outboxKey);
+      } catch (e) {
+        _noteFailure(_outboxKey, 'write error: $e');
+      }
+    });
+  }
+
+  /// 移除一条已确认 / 已放弃的待发消息（整段串行，理由同 [appendOutbox]）
+  static Future<void> removeOutbox(String convId, String clientMsgId) {
     if (convId.isEmpty ||
         clientMsgId.isEmpty ||
         _disabled.contains(_outboxKey)) {
-      return;
+      return Future<void>.value();
     }
-    try {
-      final all = await _loadOutboxMap();
-      final list = all[convId];
-      if (list == null) return;
-      list.removeWhere((x) => x['clientMsgId']?.toString() == clientMsgId);
-      if (list.isEmpty) {
-        all.remove(convId);
-      } else {
-        all[convId] = list;
+    return _serialized<void>(() async {
+      try {
+        final all = await _loadOutboxMap();
+        final list = all[convId];
+        if (list == null) return;
+        list.removeWhere((x) => x['clientMsgId']?.toString() == clientMsgId);
+        if (list.isEmpty) {
+          all.remove(convId);
+        } else {
+          all[convId] = list;
+        }
+        await _metaBox?.put(_outboxKey, jsonEncode(all));
+        _failures.remove(_outboxKey);
+      } catch (e) {
+        _noteFailure(_outboxKey, 'write error: $e');
       }
-      await _metaBox?.put(_outboxKey, jsonEncode(all));
-      _failures.remove(_outboxKey);
-    } catch (e) {
-      _noteFailure(_outboxKey, 'write error: $e');
-    }
+    });
   }
 
   // ===== 钱包余额快照（首屏直出用） =====
