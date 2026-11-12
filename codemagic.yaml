@@ -42,6 +42,12 @@ workflows:
       # 在新版 Flutter 上渲染行为可能变化（视频黑屏类问题排查变量之一）。
       flutter: 3.44.4
       xcode: latest
+      # CocoaPods 下载缓存（2026-11-12）：自动 pod install 步骤曾因 CDN 下载
+      # 中断失败（curl: (18) transfer closed）。缓存后二次构建命中即跳过下载，
+      # 大幅降低偶发网络抖动导致构建失败的概率。
+      cache:
+        cache_paths:
+          - $HOME/Library/Caches/CocoaPods
       ios_signing:
         distribution_type: app_store             # TestFlight/上架必须 app_store
         bundle_identifier: com.siqu.chat         # 与 config/app_build.json 的 iosPackageName 一致
