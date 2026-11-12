@@ -20,9 +20,9 @@ import '../utils/image_saver.dart';
 import '../utils/video_thumb.dart';
 import '../widgets/app_dialogs.dart';
 import '../widgets/brand_loading.dart';
-import '../widgets/city_picker_sheet.dart';
 import '../widgets/moment_post_card.dart';
 import '../widgets/region_picker_sheet.dart';
+import 'city_picker_page.dart';
 import 'image_viewer_page.dart';
 import 'location_picker_page.dart';
 import 'moments_camera_page.dart';
@@ -374,14 +374,16 @@ class MomentsPageState extends State<MomentsPage> {
     }
   }
 
-  /// 2026-11-10 三 tab 改版：已激活的同城 tab 再次点击 → 弹底部城市选择
-  /// 弹层（省 → 市两级，数据源复用省市区选择器的 pca.json）。
+  /// 2026-11-10 三 tab 改版：已激活的同城 tab 再次点击 → 打开城市选择页
+  /// （省 → 市两级，数据源复用省市区选择器的 pca.json）。
   /// 选中后更新 _cityName、重拉列表，并标记已手动选择
   /// （本次会话内定位回填不再覆盖）。
-  /// 2026-11-13 需求：弹层顶部显示「定位城市」行（GPS→IP 两级，
+  /// 2026-11-13 需求：选择页顶部显示「定位城市」块（GPS→IP 两级，
   /// [locateCityName]），用户先看到定位到的城市再手动切换其他地区。
+  /// 2026-11-12 改版：底部弹层（上下堆叠省市、无搜索）改为整屏城市页
+  /// [CityPickerPage]（搜索 + 定位 + 热门 + A-Z 索引 + 二级市列表）。
   Future<void> _pickCity() async {
-    final city = await CityPickerSheet.show(context,
+    final city = await CityPickerPage.show(context,
         currentCity: _cityName, locate: locateCityName);
     if (city == null || city.isEmpty || !mounted) return;
     if (city == _cityName) return;

@@ -522,6 +522,13 @@ const Map<String, String> zhTDict = {
   'momentsCityEmpty': '同城還沒有動態，換個城市或發一條朋友圈吧',
   'momentsSearchHint': '搜尋朋友圈內容',
   'momentsSearchEmpty': '沒有找到相關動態',
+  // 2026-11-12 城市選擇全螢幕頁（取代原底部彈層）
+  'citySearchHint': '搜尋城市',
+  'cityHot': '熱門城市',
+  'cityAll': '全部城市',
+  'cityNoResult': '找不到相關城市',
+  'cityNoResultHint': '換個關鍵字試試，如「廣州」',
+  'cityCurrentTag': '目前',
   'meRowFriendPrice': '加好友價格',
   'meFriendPriceFree': '免費（普通申請）',
   'meFriendPriceHint': '他人付費添加你時支付的價格（元），0=免費走普通申請',

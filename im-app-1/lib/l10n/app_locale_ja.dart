@@ -523,6 +523,13 @@ const Map<String, String> jaDict = {
   'momentsCityEmpty': 'この都市の投稿はまだありません',
   'momentsSearchHint': 'モーメントを検索',
   'momentsSearchEmpty': '関連する投稿が見つかりません',
+  // 2026-11-12 都市選択フルスクリーンページ（旧ボトムシートを置換）
+  'citySearchHint': '都市を検索',
+  'cityHot': '人気の都市',
+  'cityAll': 'すべての都市',
+  'cityNoResult': '該当する都市がありません',
+  'cityNoResultHint': '別のキーワードをお試しください（例：広州）',
+  'cityCurrentTag': '現在',
   'meRowFriendPrice': 'フレンド追加価格',
   'meFriendPriceFree': '無料（通常申請）',
   'meFriendPriceHint': '他人があなたにフレンド追加する際の価格（元）、0=無料',
