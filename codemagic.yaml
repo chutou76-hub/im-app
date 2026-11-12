@@ -42,12 +42,6 @@ workflows:
       # 在新版 Flutter 上渲染行为可能变化（视频黑屏类问题排查变量之一）。
       flutter: 3.44.4
       xcode: latest
-      # CocoaPods 下载缓存（2026-11-12）：自动 pod install 步骤曾因 CDN 下载
-      # 中断失败（curl: (18) transfer closed）。缓存后二次构建命中即跳过下载，
-      # 大幅降低偶发网络抖动导致构建失败的概率。
-      cache:
-        cache_paths:
-          - $HOME/Library/Caches/CocoaPods
       ios_signing:
         distribution_type: app_store             # TestFlight/上架必须 app_store
         bundle_identifier: com.siqu.chat         # 与 config/app_build.json 的 iosPackageName 一致
@@ -58,6 +52,14 @@ workflows:
         # Build Number 兜底基线：查不到 TestFlight 最新 build 时用「基线+构建次数」。
         # 与 config/app_build.json 的 versionCode(33) 对齐；正常情况走 TestFlight 实时查询
         BASE_BUILD_NUMBER: "33"
+    # CocoaPods 下载缓存（2026-11-12）：自动 pod install 步骤曾因 CDN 下载
+    # 中断失败（curl: (18) transfer closed）。缓存后二次构建命中即跳过下载，
+    # 大幅降低偶发网络抖动导致构建失败的概率。
+    # ⚠ cache 是工作流一级键（与 environment 平级），放 environment 里面会被
+    #   Codemagic 判为 Invalid yaml configuration。
+    cache:
+      cache_paths:
+        - $HOME/Library/Caches/CocoaPods
     scripts:
       - name: 拉取 Flutter 依赖
         script: |
