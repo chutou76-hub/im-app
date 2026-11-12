@@ -106,7 +106,12 @@ class TrtcEngineImpl implements TrtcEngine {
               _videoAvailable.remove(uid);
               final viewId = _remoteViewIds[uid];
               if (viewId != null) stopRemoteView(uid);
-              onRemoteUserLeft?.call(uid);
+              // 2026-11-12 修复「手动关闭摄像头会自动挂断通话」：视频流不可用
+              // ≠ 用户离房——对端关摄像头（stopLocalPreview）只会收到
+              // available=false，旧代码在这里调 onRemoteUserLeft，被
+              // CallService 当成「对端掉线」走 _onPeerMediaGone → 800ms 后
+              // 自动发 hangup 把通话挂断。用户真正离房由下方
+              // onRemoteUserLeaveRoom 分支负责，此处只停渲染。
             }
             break;
           case TRTCCloudListener.onRemoteUserLeaveRoom:
