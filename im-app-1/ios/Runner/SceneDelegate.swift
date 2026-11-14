@@ -34,7 +34,7 @@ class SceneDelegate: FlutterSceneDelegate {
                       options connectionOptions: UIScene.ConnectionOptions) {
     // Xinstall：冷启动时 Universal Link 在 userActivities 里。
     for userActivity in connectionOptions.userActivities where userActivity.webpageURL != nil {
-      _ = XinstallFlutterPlugin.continueUserActivity(userActivity)
+      _ = XinstallFlutterPlugin.continue(userActivity)
     }
     // Xinstall：冷启动时自定义 scheme 在 urlContexts 里。
     for urlContext in connectionOptions.urlContexts {
@@ -60,7 +60,7 @@ class SceneDelegate: FlutterSceneDelegate {
   // 2026-11-14：Opo → Xinstall，转发方法换成 XinstallFlutterPlugin 类方法。
   override func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
     // Xinstall：Universal Link 唤起，交给插件解析动态参数。
-    _ = XinstallFlutterPlugin.continueUserActivity(userActivity)
+    _ = XinstallFlutterPlugin.continue(userActivity)
     super.scene(scene, continue: userActivity)  // 2026-11-12：同名 SDK 改名，转发给插件层
   }
 }
