@@ -15,7 +15,7 @@ import 'api_client.dart';
 ///   比对走 versionName 字符串对比；versionCode 仅用于系统覆盖安装判断。
 class UpdateService {
   /// 当前 App 版本（与打包 versionName 一致，apply_config 自动同步）
-  static const currentVersion = '2.0.12';
+  static const currentVersion = '2.0.13';
 
   /// 拉取后台版本配置；网络失败返回 null（调用方静默处理，不打扰用户）
   static Future<UpdateInfo?> fetch() async {

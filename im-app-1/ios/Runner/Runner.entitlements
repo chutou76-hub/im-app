@@ -2,26 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- 极光推送必需：APNs 推送环境 entitlement。
-	     development = 开发证书调试用；Xcode 归档上传 App Store 时自动替换为 production。 -->
 	<key>aps-environment</key>
 	<string>development</string>
-	<!-- 免填邀请码（2026-11-11：Xinstall → openinstall → **Opo**）：
-	     Universal Link 关联域名（Associated Domains）。
-	     两个都保留，任一命中即可拉起（客户先后给过两个域名，Opo 后台
-	     「iOS 应用配置」里给的是 vincoi.opoinstallink.com；
-	     vincoi.opowakeup.com 是早前提供的，多留一条不影响校验）。
-	     上线前三步不能漏：
-	       1) 苹果开发者后台 App ID（com.siqu.chat）勾选 Associated Domains 服务；
-	       2) 勾选后重新下载描述文件（Provisioning Profile）并重新签名，
-	          否则真机签名校验失败、App 装不上；
-	       3) Opo 后台里的 Team ID 必须与 com.apple.developer.team-identifier 一致
-	          （Opo 用它 + Bundle ID 生成 apple-app-site-association，
-	          填错的表现：App 装好了、扫码也能过，但拿不到邀请码）。 -->
 	<key>com.apple.developer.associated-domains</key>
 	<array>
-		<string>applinks:vincoi.opoinstallink.com</string>
-		<string>applinks:vincoi.opowakeup.com</string>
+		<string>applinks:3zn6hb33.xinstall.top</string>
+		<string>applinks:3zn6hb33.xinstall.net</string>
 	</array>
 </dict>
 </plist>

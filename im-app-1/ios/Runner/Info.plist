@@ -1,137 +1,110 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
+<dict>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>私趣</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>私趣</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>com.xinstall.APP_KEY</key>
+	<string>xi3zn6hb33</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.siqu.chat.xinstall</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>vincoi</string>
+			</array>
+		</dict>
+	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>视频通话需要使用摄像头拍摄画面</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>语音和视频通话需要使用麦克风采集声音</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>发送图片时需要访问相册</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>保存图片到相册时需要添加照片权限</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>用于提升消息推送在网络切换时的送达可靠性，拒绝授权不影响使用</string>
+	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>CADisableMinimumFrameDurationOnPhone</key>
+		<key>NSAllowsArbitraryLoads</key>
 		<true/>
-		<key>CFBundleDevelopmentRegion</key>
-		<string>$(DEVELOPMENT_LANGUAGE)</string>
-		<key>CFBundleDisplayName</key>
-		<string>私趣</string>
-		<key>CFBundleExecutable</key>
-		<string>$(EXECUTABLE_NAME)</string>
-		<key>CFBundleIdentifier</key>
-		<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-		<key>CFBundleInfoDictionaryVersion</key>
-		<string>6.0</string>
-		<key>CFBundleName</key>
-		<string>私趣</string>
-		<key>CFBundlePackageType</key>
-		<string>APPL</string>
-		<key>CFBundleShortVersionString</key>
-		<string>$(FLUTTER_BUILD_NAME)</string>
-		<key>CFBundleSignature</key>
-		<string>????</string>
-		<key>CFBundleVersion</key>
-		<string>$(FLUTTER_BUILD_NUMBER)</string>
-		<!-- Opo 免填邀请码（2026-11-11：Xinstall → openinstall 老版 → **Opo**）：
-		     SDK 初始化用的 iOS appKey。键名固定 com.opoinstall.APP_KEY，不能改。
-		     ⚠️ 老版 openinstall 的键名是 com.openinstall.APP_KEY（少一个 po），
-		        两套 SDK 后端不互通；键名写错 / 仍链旧库的表现是「能装能开、
-		        注册页不填码」，且**不报错**。
-		     2026-11-11 客户二次确认为 vincoi（「AppKey：vincoi，没有 s」）。
-		     Android 侧 android/gradle.properties 的 OPENINSTALL_APPKEY 必须同值。 -->
-		<key>com.opoinstall.APP_KEY</key>
-		<string>vincoi</string>
-		<!-- 免填邀请码（2026-11-11）：一键拉起用的 URL Types。
-		     2026-11-11 客户确认本应用 scheme = vincoi，appKey 同为 vincoi。
-		     必须与 Android 侧 android/gradle.properties 的 OPENINSTALL_SCHEME 完全一致，
-		     且与 Runner.entitlements 的关联域名同属一个 Opo 应用（appKey=vincoi）。
-		     注意：iOS 的 scheme 区分大小写，必须小写 vincoi；
-		     也不要动 tobias 的 siquchat scheme —— pubspec.yaml 顶部的
-		     tobias.url_scheme 依赖它，缺失会导致 pod install 失败。 -->
-		<key>CFBundleURLTypes</key>
-		<array>
-			<dict>
-				<key>CFBundleURLName</key>
-				<string>com.siqu.chat.openinstall</string>
-				<key>CFBundleURLSchemes</key>
-				<array>
-					<string>vincoi</string>
-				</array>
-			</dict>
-		</array>
-		<!-- 出口合规声明：仅使用系统标准加密（HTTPS/TLS），无需 CCATS 文档。
-		     若日后启用自研端到端加密算法，需改为 <true/> 并补充合规材料 -->
-		<key>ITSAppUsesNonExemptEncryption</key>
-		<false/>
-		<key>LSRequiresIPhoneOS</key>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
 		<true/>
-		<!-- 音视频通话（腾讯云 TRTC）：iOS 缺这两项时一调用摄像头/麦克风就直接崩溃 -->
-		<key>NSCameraUsageDescription</key>
-		<string>视频通话需要使用摄像头拍摄画面</string>
-		<key>NSMicrophoneUsageDescription</key>
-		<string>语音和视频通话需要使用麦克风采集声音</string>
-		<!-- 相册选图发送（image_picker） -->
-		<key>NSPhotoLibraryUsageDescription</key>
-		<string>发送图片时需要访问相册</string>
-		<!-- 朋友圈图片保存到相册（image_gallery_saver 只写入不读取） -->
-		<key>NSPhotoLibraryAddUsageDescription</key>
-		<string>保存图片到相册时需要添加照片权限</string>
-		<!-- 极光 JCore 引用了 CoreLocation API（ITMS-90683）：App 本身不采集位置，
-	     仅推送 SDK 在网络切换时用其做连接优化；拒绝授权不影响任何功能 -->
-		<key>NSLocationWhenInUseUsageDescription</key>
-		<string>用于提升消息推送在网络切换时的送达可靠性，拒绝授权不影响使用</string>
-		<!-- 发现页内置 WebView：仅对 App 内 WKWebView 放行 http 网页（小程序）；
-	     App 自身网络请求仍强制 HTTPS；NSAllowsLocalNetworking 保留局域网 http 调试能力。
-	     2026-09-19 补 NSAllowsArbitraryLoads：ad-hoc 分发包接口可能用 http（无证书域名），
-	     iOS ATS 默认拦截一切 http → 启动页接口全挂反复重试像卡死。ad-hoc 包全局放行；
-	     以后上 App Store 前再按需收紧（https 接口本来就不需要这行）。 -->
-		<key>NSAppTransportSecurity</key>
-		<dict>
-			<key>NSAllowsArbitraryLoads</key>
-			<true/>
-			<key>NSAllowsArbitraryLoadsInWebContent</key>
-			<true/>
-			<key>NSAllowsLocalNetworking</key>
-			<true/>
-		</dict>
-		<key>UIApplicationSceneManifest</key>
-		<dict>
-			<key>UIApplicationSupportsMultipleScenes</key>
-			<false/>
-			<key>UISceneConfigurations</key>
-			<dict>
-				<key>UIWindowSceneSessionRoleApplication</key>
-				<array>
-					<dict>
-						<key>UISceneClassName</key>
-						<string>UIWindowScene</string>
-						<key>UISceneConfigurationName</key>
-						<string>flutter</string>
-						<key>UISceneDelegateClassName</key>
-						<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
-						<key>UISceneStoryboardFile</key>
-						<string>Main</string>
-					</dict>
-				</array>
-			</dict>
-		</dict>
-		<key>UIApplicationSupportsIndirectInputEvents</key>
+		<key>NSAllowsLocalNetworking</key>
 		<true/>
-		<!-- 极光推送必需：允许 App 退后台后仍接收 APNs 长连接唤醒 -->
-		<key>UIBackgroundModes</key>
-		<array>
-			<string>remote-notification</string>
-		</array>
-		<key>UILaunchStoryboardName</key>
-		<string>LaunchScreen</string>
-		<key>UIMainStoryboardFile</key>
-		<string>Main</string>
-		<key>UISupportedInterfaceOrientations</key>
-		<array>
-			<string>UIInterfaceOrientationPortrait</string>
-			<string>UIInterfaceOrientationLandscapeLeft</string>
-			<string>UIInterfaceOrientationLandscapeRight</string>
-		</array>
-		<key>UISupportedInterfaceOrientations~ipad</key>
-		<array>
-			<string>UIInterfaceOrientationPortrait</string>
-			<string>UIInterfaceOrientationPortraitUpsideDown</string>
-			<string>UIInterfaceOrientationLandscapeLeft</string>
-			<string>UIInterfaceOrientationLandscapeRight</string>
-		</array>
-		<key>UIStatusBarHidden</key>
-		<false/>
 	</dict>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneClassName</key>
+					<string>UIWindowScene</string>
+					<key>UISceneConfigurationName</key>
+					<string>flutter</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+					<key>UISceneStoryboardFile</key>
+					<string>Main</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIStatusBarHidden</key>
+	<false/>
+</dict>
 </plist>

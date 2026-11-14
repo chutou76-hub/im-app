@@ -60,11 +60,12 @@ post_install do |installer|
     end
   end
 
-  # 2026-11-11：Xinstall 换成 OpenInstall 后，原先为 Xinstall 静态库加的
-  # EXCLUDED_ARCHS[sdk=iphonesimulator*]=arm64 已全部删除（本文件与
-  # ios/Flutter/Debug.xcconfig 两处）。原因：那个排除是给
-  # libXinstallSDK.a（缺 arm64-simulator 片）兜底的，OpenInstall 走 CocoaPods
-  # 正常分发 ARM slice，保留排除反而会让 Apple Silicon 的模拟器完全跑不起来。
-  # 若将来某个 OpenInstall 版本也报 "building for iOS Simulator, but linking in
-  # object file built for iOS"，再按 pod 层 + Runner 层两处加回即可（真机与归档不受影响）。
+  # 2026-11-14：免填邀请码 SDK 再次更换 —— Opo → Xinstall（官方 Flutter 插件
+  # xinstall_flutter_plugin，iOS 依赖 XInstallSDK pod，由插件 podspec 自动带入）。
+  # 2026-11-11 加过的 EXCLUDED_ARCHS[sdk=iphonesimulator*]=arm64 已全部删除
+  # （本文件与 ios/Flutter/Debug.xcconfig 两处）：老 Xinstall 静态库
+  # libXinstallSDK.a 缺 arm64-simulator 片，排除会让 Apple Silicon 模拟器
+  # 完全跑不起来；真机与 Codemagic 归档（真机）本来就不受影响。
+  # 若新 SDK 仍报 "building for iOS Simulator, but linking in object file
+  # built for iOS"，再按 pod 层 + Runner 层两处加回（见 Debug.xcconfig 说明）。
 end

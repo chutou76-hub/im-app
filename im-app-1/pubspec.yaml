@@ -1,7 +1,7 @@
 name: im_app
 description: "企业内部即时通讯 - 移动端"
 publish_to: 'none'
-version: 2.0.12+42
+version: 2.0.13+43
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -76,16 +76,14 @@ dependencies:
                               # H5 垫片（web_connectivity_shim）直接 import，6.x 老式 web 注册在新
                               # SDK 被跳过，须以垫片替代（7.x web 实现同理，垫片在 main 启动覆盖）
   connectivity_plus_platform_interface: ^2.1.0  # 同上，垫片实现 ConnectivityPlatform 用
-  # 2026-11-11：Xinstall → openinstall → **Opo（opoinstall.com）**。
-  # 最终换成 Opo 的原因：客户账号是 Opo 体系（developer.opoinstall.com /
-  # opopage.com / opoinstallink.com），而 openinstall_flutter_plugin 内置的是
-  # **老版** SDK 3.1.0（com.openinstall.*），两套是不同产品、appKey 不通用，
-  # 初始化必然报「appKey错误」→ decodeInstall fail : INIT_ERROR。
-  # Opo 官方没有 Flutter 插件（pub.dev 搜不到，官网 Flutter 标签页也无真实
-  # .dart 代码），所以本项目自带本地插件 plugins/opo_install/（Android jar +
-  # iOS xcframework 随插件入库，不依赖外网下载）。
-  opo_install:
-    path: plugins/opo_install
+  # 2026-11-14：免填邀请码 SDK 第三次更换 —— Opo（opoinstall.com）→ **Xinstall（xinstall.com）**。
+  # Opo 退场原因：客户实测「不支持国内」（归因/统计不稳定），换回国内主流的 Xinstall。
+  # 演进史：Xinstall → openinstall 老版 → Opo（2026-11-11）→ **Xinstall（2026-11-14，走完一圈）**。
+  # Xinstall 有官方 Flutter 插件（xinstall_flutter_plugin，pub.dev），无需再维护本地桥接；
+  # 原 plugins/opo_install/ 目录已从依赖移除（文件暂留在仓库，便于回退）。
+  # appKey 注入：Android → android/gradle.properties XINSTALL_APPKEY；
+  #             iOS → ios/Runner/Info.plist com.xinstall.APP_KEY。
+  xinstall_flutter_plugin: ^1.7.6
 
 dev_dependencies:
   flutter_test:

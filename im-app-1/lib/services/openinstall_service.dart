@@ -3,28 +3,30 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:opo_install/opo_install.dart';
+import 'package:xinstall_flutter_plugin/xinstall_flutter_plugin.dart';
 
 import 'feature_flags.dart';
 
 /// 免填邀请码（携带参数安装 / 一键拉起）。
 ///
 /// 演进史（每次换的都是**不同产品**，不是改个包名就能复用）：
-///   Xinstall → openinstall（老版）→ **Opo（opoinstall.com，2026-11-11 定稿）**
+///   Xinstall → openinstall（老版）→ Opo（opoinstall.com，2026-11-11）→
+///   **Xinstall（xinstall.com，2026-11-14 定稿）**——走完一圈回到 Xinstall：
+///   客户实测 Opo 归因在国内不稳定（「不支持国内」），换回国内主流的
+///   Xinstall，这次用的是它的**官方 Flutter 插件** xinstall_flutter_plugin。
 ///
-/// 为什么必须换到 Opo：客户账号在 `developer.opoinstall.com`，落地页是
-/// `opopage.com`、web SDK 是 `res.opoinstalljs.com/opo-<appKey>.js`，全是 Opo
-/// 体系；而 `openinstall_flutter_plugin` 内置老版 SDK 3.1.0
-/// （`com.openinstall.*`），两者后端不互通 —— 老版 SDK 拿 Opo 的 appKey 去校验，
-/// 必然返回「appKey错误，请登陆 openinstall 查看应用配置」→ `INIT_ERROR`。
+/// 取值链路（Xinstall）：
+///   1. 用户打开我们自托管的 H5 落地页（服务端 `GET /api/v1/dl?inviteCode=xxx`），
+///      页面加载 Xinstall web SDK（cdn.xinstall.com/xinstall.js），
+///      `XInstall.parseUrlParams()` 把 URL 参数 + 设备指纹上报给 Xinstall；
+///   2. 用户装好 App 首次打开 → `getInstallParam` 拿回首装参数
+///      （Map，`data.uo` = 落地页 URL 上的查询参数，如 `{"inviteCode":"AB12CD"}`）；
+///   3. 已安装用户点链接被拉起 → `registerWakeUpHandler` 回调（数据格式同上，
+///      另有 `data.co` = 落地页按钮传参）。
 ///
-/// 取值链路（Opo）：
-///   1. 用户打开我们的 H5 落地页（服务端 `GET /api/v1/dl?inviteCode=xxx`），
-///      页面里的 `OpoInstall.parseUrlParams()` 把参数与设备指纹上报给 Opo；
-///   2. 用户装好 App 首次打开 → `getInstallParam` 拿回 `bindData`
-///      （JSON 字符串，如 `{"inviteCode":"AB12CD"}`）；
-///   3. 已安装用户点链接被拉起 → 走拉起回调（Android: handleDeepLink /
-///      registerDeepLinkCallback；iOS: SceneDelegate 转发 universal link / scheme）。
+/// 与 Opo 的两大差异（解析逻辑因此不同）：
+///   ① 参数是 **Map 嵌套对象**（uo/co），不再是 JSON 字符串 bindData；
+///   ② appKey **全平台一个**（后台复制即可），不再区分 web appkey。
 ///
 /// 全链路静默降级：后台没开 / Web 端 / 原生插件缺失 → 跳过或吞异常，
 /// **绝不影响 App 启动**；拿不到码时注册页输入框保持原样。
@@ -42,26 +44,23 @@ class OpenInstallService {
   /// 通用 KV：与 AppSettings 同一套（FlutterSecureStorage），不引入新依赖
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
+  /// Xinstall 官方 Flutter 插件单例（getInstance()，v1.5.0+ 必须 init 后才能用）
+  XinstallFlutterPlugin? _xinstall;
+
   /// 调试日志开关（编译期注入，默认关）。
   /// 打开方式：flutter build apk --dart-define=OPENINSTALL_DEBUG=true
-  /// 打开后：① 打开 SDK 内部日志并关闭模拟器检测；② 记录诊断流水，App 启动
+  /// 打开后：① 打开 SDK 内部日志（setLog）；② 记录诊断流水，App 启动
   /// 后自动弹出可复制的诊断框（见 [diagnostics]）。
   static const bool _verbose = bool.fromEnvironment('OPENINSTALL_DEBUG');
 
   /// 防止重复初始化（main() 与页面可能各调一次）
   bool _inited = false;
 
-  /// install 重试次数（SDK 要求重试时用，最多 2 次）
+  /// install 重试次数（最多 2 次）
   int _retry = 0;
 
-  /// 拉起回调订阅（长期驻留，App 运行中被拉起也要能收到）
-  StreamSubscription<OpoInstallResult>? _wakeupSub;
-
-  /// SDK 版本号（OpoInstall.getVersion()，诊断用）
-  String _sdkVersion = '';
-
-  /// 设备标识（全 0 表示 SDK 未激活成功 —— 这是「拿不到参数」最强的信号）
-  String _opid = '';
+  /// 拉起回调是否已注册（防重复注册）
+  bool _wakeupRegistered = false;
 
   /// 内存态待用邀请码（ValueNotifier 便于注册页监听；也可直接读 getter）
   final ValueNotifier<String> pendingInviteCodeNotifier =
@@ -111,7 +110,7 @@ class OpenInstallService {
 
   /// 统一日志出口：debugPrint（adb / Xcode 可看）+ 诊断流水（App 内可看）
   void _log(String msg) {
-    debugPrint('[Opo] $msg');
+    debugPrint('[Xinstall] $msg');
     if (!_verbose) return;
     final ms = DateTime.now().difference(_boot).inMilliseconds;
     _diag.add('+${(ms / 1000).toStringAsFixed(2)}s  $msg');
@@ -125,15 +124,15 @@ class OpenInstallService {
   /// 不需要连电脑跑 adb。
   String diagnostics() {
     final b = StringBuffer();
-    b.writeln('===== Opo 免填邀请码 诊断报告 =====');
+    b.writeln('===== Xinstall 免填邀请码 诊断报告 =====');
     b.writeln('时间: ${_fmtTime(DateTime.now())}');
     b.writeln('平台: ${kIsWeb ? "web" : defaultTargetPlatform.name}');
     b.writeln('诊断模式: ${_verbose ? "开（OPENINSTALL_DEBUG=true）" : "关"}');
     b.writeln('');
     b.writeln('[SDK]');
-    b.writeln('  版本     = ${_sdkVersion.isEmpty ? "(未初始化)" : _sdkVersion}');
-    b.writeln('  opid     = ${_opid.isEmpty ? "(空)" : _opid}'
-        '${_opid.replaceAll("0", "").isEmpty && _opid.isNotEmpty ? "  ← 全 0，说明 SDK 未激活成功" : ""}');
+    b.writeln('  插件     = xinstall_flutter_plugin（官方，pub.dev 1.7.x）');
+    b.writeln('  已接线   = ${_xinstall != null ? "是" : "否"}');
+    b.writeln('  拉起回调 = ${_wakeupRegistered ? "已注册" : "未注册"}');
     b.writeln('');
     b.writeln('[配置]');
     b.writeln('  免填开关 openinstallEnabled = '
@@ -179,8 +178,11 @@ class OpenInstallService {
     // ① 先恢复本地未消费的邀请码（纯本地、无网络），保证注册页哪怕在
     //    离线/秒开场景下也能拿到上次留下的邀请码
     await hydrate();
-    // ② Web 端没有原生实现，直接跳过
-    if (!OpoInstall.isSupported) {
+    // ② Web / 桌面端没有原生实现，直接跳过
+    final supported = !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS);
+    if (!supported) {
       _log('当前平台无原生实现（${kIsWeb ? "web" : defaultTargetPlatform.name}），跳过');
       _markSettled('跳过：当前平台无原生实现');
       return;
@@ -202,7 +204,7 @@ class OpenInstallService {
       }
       _log('状态: enabled=$enabled, paramKey=$_paramKey, '
           'promoUrl=${FeatureFlags.instance.openinstallPromoUrl.value}'
-          '（appKey 由原生 manifest / Info.plist 注入，Dart 不可见）');
+          '（appKey 由原生 gradle.properties / Info.plist 注入，Dart 不可见）');
       if (!enabled) {
         _log('后台未开启免填邀请码，跳过');
         _markSettled('跳过：后台开关 openinstallEnabled=false');
@@ -210,27 +212,30 @@ class OpenInstallService {
       }
       // 注意：**不用**「推广链接为空」当作跳过条件 —— 链接指向我们自己的
       // 落地页（服务端有默认值），appKey 是原生编译期注入的，与链接无关。
-      _log('开始接线（initialize + start + install）');
+      _log('开始接线（setLog + init + 注册回调 + getInstallParam）');
       // ④ MethodChannel 调用在原生未注册时抛的是**异步** MissingPluginException，
       //    普通 try/catch 抓不到 → 用 runZonedGuarded 兜住，绝不冒泡到全局。
+      // ⑤ 插件 API 均为 void（fire-and-forget 的 MethodChannel 调用）：
+      //    init 必须最先调（v1.5.0+ 硬性要求）；SDK 内部日志开关没有 Dart API，
+      //    诊断信息全靠本类自己的流水（_diag）。
       await runZonedGuarded<Future<void>>(
         () async {
-          _sdkVersion = await OpoInstall.initialize(debug: _verbose);
-          _log('SDK 初始化完成，版本=$_sdkVersion');
-          await OpoInstall.start();
-          _log('已调用 start（触发采集与服务器交互）');
+          final x = XinstallFlutterPlugin.getInstance();
+          _xinstall = x;
+          x.init();
+          _log('已调用 SDK init');
 
           // 拉起回调（App 已安装、被 scheme / universal link 唤起）
-          _wakeupSub?.cancel();
-          _wakeupSub = OpoInstall.wakeupStream.listen(
-            _onWakeup,
-            onError: (Object e) => _log('拉起回调流异常: $e'),
-          );
-          _log('已订阅拉起回调');
+          if (!_wakeupRegistered) {
+            x.registerWakeUpHandler(_onWakeupMap);
+            _wakeupRegistered = true;
+            _log('已注册拉起回调');
+          }
 
-          // 首装参数（SDK 内部等激活结果，最多 timeout 秒）
-          final r = await OpoInstall.getInstallParam(timeoutSeconds: 10);
-          await _onInstall(r);
+          // 首装参数（未安装 → 装完首次打开；回调一次即止，拿不到时靠重试）；
+          // timeout 传给原生侧等待归因结果的秒数（官方默认 10）。
+          x.getInstallParam(_onInstallMap, 10);
+          _log('已调用 getInstallParam，等回调');
         },
         (e, s) {
           _log('async error: $e');
@@ -245,21 +250,20 @@ class OpenInstallService {
   }
 
   /// 拉起回调（App 已安装场景）
-  Future<void> _onWakeup(OpoInstallResult r) async {
-    await _onResult(r, tag: 'wakeup');
+  Future<void> _onWakeupMap(Map<String, dynamic> data) async {
+    await _onResult(data, tag: 'wakeup');
   }
 
   /// 首装参数回调（未安装 → 装完首次打开）。
-  /// SDK 说可重试时（错误码 -8 / shouldRetry），3 秒后重试，最多 2 次。
-  Future<void> _onInstall(OpoInstallResult r) async {
-    await _onResult(r, tag: 'install');
-    if (r.retryable && _retry < 2) {
+  /// 拿不到参数时 3 秒后重试 getInstallParam，最多 2 次。
+  Future<void> _onInstallMap(Map<String, dynamic> data) async {
+    await _onResult(data, tag: 'install');
+    if (_pickCode(data).isEmpty && _retry < 2) {
       _retry++;
-      _log('SDK 要求重试，第 $_retry 次重试（3s 后）');
-      Timer(const Duration(seconds: 3), () async {
+      _log('未取到参数，第 $_retry 次重试（3s 后）');
+      Timer(const Duration(seconds: 3), () {
         try {
-          final again = await OpoInstall.getInstallParam(timeoutSeconds: 10);
-          await _onInstall(again);
+          _xinstall?.getInstallParam(_onInstallMap);
         } catch (e) {
           _log('retry failed: $e');
         }
@@ -270,33 +274,24 @@ class OpenInstallService {
   /// 解析回调：拿到邀请码 → 落本地 + 更新内存待用值。
   /// 同一次安装可能被回调多次（拉起与首装都会触发），已被使用过的情况下
   /// 不再写入，避免重复注册复用旧码。
-  Future<void> _onResult(OpoInstallResult r, {required String tag}) async {
+  Future<void> _onResult(Map<String, dynamic> r, {required String tag}) async {
     try {
-      // 顺手刷新 opid（诊断关键：全 0 = 未激活）
-      try {
-        _opid = await OpoInstall.getOpId();
-      } catch (_) {}
+      _log('$tag 回调: $r');
 
-      _log('$tag 回调: ok=${r.ok} bindData="${r.bindData}" '
-          'channelCode="${r.channelCode}" opid="$_opid" '
-          'errorCode=${r.errorCode} errorMsg="${r.errorMsg}" '
-          'shouldRetry=${r.shouldRetry}');
-
-      final code = _pick(r);
+      final code = _pickCode(r);
       if (code.isEmpty) {
         // 空数据的典型原因（按概率从高到低）：
         //   ① 覆盖安装 / 非首装：设备早有安装记录，SDK 不再做安装归因
         //   ② 落地页不是在**这台手机**上打开的（电脑开页面 + 手机装包）
         //   ③ 控制台应用信息（Android 包名 com.siqu.chat / 签名）与包不一致
-        //   ④ 模拟器：Opo 默认不统计模拟器设备
+        //   ④ 落地页没集成 Xinstall web SDK / appKey 不一致
         _log('$tag 没取到邀请码，原因排查：是否覆盖安装 / 页面是否本机打开 / '
-            '控制台包名是否 com.siqu.chat / 是否模拟器');
+            '控制台包名是否 com.siqu.chat / 落地页 web SDK 与 appKey 是否一致');
         if (tag == 'install') {
-          if (r.retryable) {
+          if (_retry < 2) {
             _touch(); // 还会自动重试 → 先不落定，弹窗保持"检测中"
           } else {
-            _markSettled('未取到邀请码（install 已回调，但没有参数）：'
-                '${r.errorMsg.isEmpty ? "bindData 为空" : r.errorMsg}');
+            _markSettled('未取到邀请码（install 已回调，但没有参数）');
           }
         } else {
           // 拉起拿到空数据不代表最终结果（首装以 install 为准）
@@ -332,25 +327,46 @@ class OpenInstallService {
     return k.isEmpty ? 'inviteCode' : k;
   }
 
-  /// 从结果里取邀请码。`bindData` 是 **JSON 字符串**，不同接入方式还有几种变体，
-  /// 按可能性从高到低依次尝试：
-  ///   ① `{"inviteCode":"AB12CD"}`   —— web SDK parseUrlParams 的标准产物
-  ///   ② `"inviteCode=AB12CD"`       —— 手工拼 query 串
-  ///   ③ `"AB12CD"`                  —— 直接把邀请码当纯值传
-  ///   ④ 顶层平铺（少数版本）
-  String _pick(OpoInstallResult r) {
-    final raw = r.bindData.trim();
-    if (raw.isNotEmpty) {
-      // ① JSON 对象（含少数把参数套在 data 字段里的接入）
+  /// 从 Xinstall 回调里取邀请码。回调是 **Map 嵌套对象**（与 Opo 的 JSON
+  /// 字符串 bindData 不同），按可能性从高到低依次尝试：
+  ///   ① `data.uo.<paramKey>` —— 落地页 URL 查询参数（web SDK parseUrlParams
+  ///      的标准产物，官方文档明确「获取方式：通过 key 为 UO 获取」）
+  ///   ② `data.co.<paramKey>` —— 落地页按钮传参（buttonId 配置的 params）
+  ///   ③ `data.<paramKey>`    —— 少数版本平铺在 data 里
+  ///   ④ 顶层 `<paramKey>`    —— 极旧版本/异常格式兜底
+  ///   ⑤ data 是字符串时的变体 —— JSON / query 串 / 纯值（与 Opo 时代的
+  ///      解析兼容，防止某些安卓 ROM 上 SDK 行为差异）
+  String _pickCode(Map<String, dynamic> r) {
+    final pk = _paramKey;
+    final inner = r['data'];
+    if (inner is Map) {
+      // ①② uo（URL 参数）/ co（按钮参数）
+      for (final k in const ['uo', 'co', 'UO', 'CO']) {
+        final m = inner[k];
+        if (m is Map) {
+          final v = m[pk]?.toString().trim() ?? '';
+          if (v.isNotEmpty) return v;
+        }
+      }
+      // ③ 平铺在 data 里
+      final v = inner[pk]?.toString().trim() ?? '';
+      if (v.isNotEmpty) return v;
+    }
+    // ④ 顶层平铺
+    final top = r[pk]?.toString().trim() ?? '';
+    if (top.isNotEmpty) return top;
+    // ⑤ data 是字符串的变体（JSON 对象 / query 串 / 纯值）
+    if (inner is String && inner.trim().isNotEmpty) {
+      final raw = inner.trim();
       if (raw.startsWith('{')) {
         try {
           final dec = jsonDecode(raw);
           if (dec is Map) {
-            final v = dec[_paramKey]?.toString().trim() ?? '';
+            final v = dec[pk]?.toString().trim() ?? '';
             if (v.isNotEmpty) return v;
             final nested = dec['data'];
             if (nested is Map) {
-              final v2 = nested[_paramKey]?.toString().trim() ?? '';
+              final v2 = nested[pk]?.toString().trim() ?? '';
               if (v2.isNotEmpty) return v2;
             }
           }
@@ -358,15 +374,13 @@ class OpenInstallService {
           _log('bindData JSON 解析失败: $e');
         }
       }
-      // ② query 串形式
       if (raw.contains('=') && !raw.startsWith('{')) {
         try {
           final q = Uri.splitQueryString(raw);
-          final v = q[_paramKey]?.trim() ?? '';
+          final v = q[pk]?.trim() ?? '';
           if (v.isNotEmpty) return v;
         } catch (_) {}
       }
-      // ③ 纯值：长度合理且不含明显结构字符才认，避免把渠道串当邀请码
       if (!raw.startsWith('{') && !raw.contains('=') && !raw.contains('&') &&
           raw.length <= 64) {
         return raw;
@@ -412,16 +426,19 @@ class OpenInstallService {
       await _storage.delete(key: _kCodeKey);
       await _storage.write(key: _kUsedKey, value: '1');
     } catch (e) {
-      debugPrint('[Opo] consume failed: $e');
+      debugPrint('[Xinstall] consume failed: $e');
     }
     reportRegister();
   }
 
   /// 上报注册事件（渠道统计）。静默失败：统计丢一次不算业务问题。
   void reportRegister() {
-    if (!OpoInstall.isSupported) return;
-    OpoInstall.reportRegister().catchError((Object e) {
-      debugPrint('[Opo] reportRegister failed: $e');
-    });
+    final x = _xinstall;
+    if (x == null) return;
+    try {
+      x.reportRegister();
+    } catch (e) {
+      debugPrint('[Xinstall] reportRegister failed: $e');
+    }
   }
 }

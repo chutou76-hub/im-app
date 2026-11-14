@@ -34,16 +34,14 @@ android {
         // getuiflut 插件 manifest 合并必需占位符（Android 侧当前不启用个推，留空即可；
         // 仅 iOS 运行时由服务端下发 appId 启动 SDK）
         manifestPlaceholders["GETUI_APPID"] = ""
-        // OpenInstall 免填邀请码（2026-11-11：由 Xinstall 换成 OpenInstall）：
-        // AndroidManifest 里的 <meta-data com.openinstall.APP_KEY> 与用拉起 intent-filter
-        // 的 android:scheme 都读这两个占位符，真正取值来自 android/gradle.properties。
-        // 用 providers.gradleProperty 而不是硬编码，CI / 本地可用 -POPENINSTALL_APPKEY=xxx 覆盖。
-        // scheme 给 "openinstall" 兜底：空 scheme 会让 manifest 合并出非法节点，
-        // 而 openinstall 这个默认值即使没配也不会让别人误拉起本应用。
-        manifestPlaceholders["OPENINSTALL_APPKEY"] =
-            providers.gradleProperty("OPENINSTALL_APPKEY").getOrElse("")
-        manifestPlaceholders["OPENINSTALL_SCHEME"] =
-            providers.gradleProperty("OPENINSTALL_SCHEME").getOrElse("openinstall")
+        // Xinstall 免填邀请码（2026-11-14：Opo → Xinstall，官方 Flutter 插件）：
+        // AndroidManifest 里的 <meta-data com.xinstall.APP_KEY> 与拉起 intent-filter
+        // 的 android:scheme（xi${XINSTALL_APPKEY}）都读这个占位符，真正取值来自
+        // android/gradle.properties 的 XINSTALL_APPKEY。
+        // 用 providers.gradleProperty 而不是硬编码，CI / 本地可用 -PXINSTALL_APPKEY=xxx 覆盖。
+        // 留空 = 未配置：SDK 不会初始化成功，但**不阻塞构建**（功能开关默认关）。
+        manifestPlaceholders["XINSTALL_APPKEY"] =
+            providers.gradleProperty("XINSTALL_APPKEY").getOrElse("")
         // 瘦身说明：不要在这里写 ndk.abiFilters —— Flutter Gradle 插件会设置 splits abi，
         // 两者并存会报 "Conflicting configuration"。用打包命令控制架构：
         //   flutter build apk --release --split-per-abi  （arm64 单包约 45M，上架推荐）
