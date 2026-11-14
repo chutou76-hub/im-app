@@ -1,3 +1,4 @@
+#include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"
 #include "Generated.xcconfig"
 
 // ===== 免填邀请码 SDK 演进记录（2026-11-14：Opo → Xinstall，xinstall_flutter_plugin）=====
