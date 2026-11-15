@@ -327,64 +327,43 @@ class OpenInstallService {
     return k.isEmpty ? 'inviteCode' : k;
   }
 
-  /// 从 Xinstall 回调里取邀请码。回调是 **Map 嵌套对象**（与 Opo 的 JSON
-  /// 字符串 bindData 不同），按可能性从高到低依次尝试：
-  ///   ① `data.uo.<paramKey>` —— 落地页 URL 查询参数（web SDK parseUrlParams
-  ///      的标准产物，官方文档明确「获取方式：通过 key 为 UO 获取」）
-  ///   ② `data.co.<paramKey>` —— 落地页按钮传参（buttonId 配置的 params）
-  ///   ③ `data.<paramKey>`    —— 少数版本平铺在 data 里
-  ///   ④ 顶层 `<paramKey>`    —— 极旧版本/异常格式兜底
-  ///   ⑤ data 是字符串时的变体 —— JSON / query 串 / 纯值（与 Opo 时代的
-  ///      解析兼容，防止某些安卓 ROM 上 SDK 行为差异）
-  String _pickCode(Map<String, dynamic> r) {
-    final pk = _paramKey;
-    final inner = r['data'];
-    if (inner is Map) {
-      // ①② uo（URL 参数）/ co（按钮参数）
-      for (final k in const ['uo', 'co', 'UO', 'CO']) {
-        final m = inner[k];
-        if (m is Map) {
-          final v = m[pk]?.toString().trim() ?? '';
-          if (v.isNotEmpty) return v;
-        }
-      }
-      // ③ 平铺在 data 里
-      final v = inner[pk]?.toString().trim() ?? '';
-      if (v.isNotEmpty) return v;
-    }
-    // ④ 顶层平铺
-    final top = r[pk]?.toString().trim() ?? '';
-    if (top.isNotEmpty) return top;
-    // ⑤ data 是字符串的变体（JSON 对象 / query 串 / 纯值）
-    if (inner is String && inner.trim().isNotEmpty) {
-      final raw = inner.trim();
+  // 原生桥可能将 data、uo 或 co 作为 JSON 字符串传回。
+  Map? _asParams(dynamic value) {
+    if (value is Map) return value;
+    if (value is! String || value.trim().isEmpty) return null;
+    final raw = value.trim();
+    try {
       if (raw.startsWith('{')) {
-        try {
-          final dec = jsonDecode(raw);
-          if (dec is Map) {
-            final v = dec[pk]?.toString().trim() ?? '';
-            if (v.isNotEmpty) return v;
-            final nested = dec['data'];
-            if (nested is Map) {
-              final v2 = nested[pk]?.toString().trim() ?? '';
-              if (v2.isNotEmpty) return v2;
-            }
-          }
-        } catch (e) {
-          _log('bindData JSON 解析失败: $e');
-        }
+        final decoded = jsonDecode(raw);
+        return decoded is Map ? decoded : null;
       }
-      if (raw.contains('=') && !raw.startsWith('{')) {
-        try {
-          final q = Uri.splitQueryString(raw);
-          final v = q[pk]?.trim() ?? '';
-          if (v.isNotEmpty) return v;
-        } catch (_) {}
+      if (raw.contains('=')) return Uri.splitQueryString(raw);
+    } on FormatException {
+      return null;
+    } on ArgumentError {
+      return null;
+    }
+    return null;
+  }
+
+  String _pickCode(Map<String, dynamic> r) {
+    final key = _paramKey;
+    final inner = _asParams(r['data']);
+    final nested = _asParams(inner?['data']);
+    for (final group in [inner, nested, r]) {
+      if (group == null) continue;
+      for (final field in const ['uo', 'UO', 'co', 'CO']) {
+        final code = _asParams(group[field])?[key];
+        if (code is String && code.trim().isNotEmpty) return code.trim();
+        if (code is num) return code.toString();
       }
-      if (!raw.startsWith('{') && !raw.contains('=') && !raw.contains('&') &&
-          raw.length <= 64) {
-        return raw;
-      }
+      final code = group[key];
+      if (code is String && code.trim().isNotEmpty) return code.trim();
+      if (code is num) return code.toString();
+    }
+    final raw = r['data'];
+    if (raw is String && RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(raw.trim())) {
+      return raw.trim();
     }
     return '';
   }
