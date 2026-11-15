@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:xinstall_flutter_plugin/xinstall_flutter_plugin.dart';
 
 import 'feature_flags.dart';
+import 'update_service.dart'; // 2026-11-15 诊断报告显示 App 版本号（防「客户测的是旧包」误判）
 
 /// 免填邀请码（携带参数安装 / 一键拉起）。
 ///
@@ -127,6 +128,7 @@ class OpenInstallService {
     b.writeln('===== Xinstall 免填邀请码 诊断报告 =====');
     b.writeln('时间: ${_fmtTime(DateTime.now())}');
     b.writeln('平台: ${kIsWeb ? "web" : defaultTargetPlatform.name}');
+    b.writeln('App版本: ${UpdateService.currentVersion}');
     b.writeln('诊断模式: ${_verbose ? "开（OPENINSTALL_DEBUG=true）" : "关"}');
     b.writeln('');
     b.writeln('[SDK]');
