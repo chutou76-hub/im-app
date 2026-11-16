@@ -73,6 +73,7 @@ class V2Field extends StatefulWidget {
     this.enabled = true,
     this.readOnly = false,
     this.onTap,
+    this.onIconLongPress,
     this.autofocus = false,
   });
 
@@ -91,6 +92,10 @@ class V2Field extends StatefulWidget {
   final bool enabled;
   final bool readOnly;
   final VoidCallback? onTap;
+  // 意图+2026-11-16（11bf，客户修正版）：左侧图标的**长按**回调（注册页
+  // 邀请码诊断入口——客户要求无任何可见 UI、手势放在普通用户绝不会触发的
+  // 长按上）。不传时图标行为与原先完全一致（整框聚焦）。
+  final VoidCallback? onIconLongPress;
   final bool autofocus;
 
   @override
@@ -131,7 +136,16 @@ class _V2FieldState extends State<V2Field> {
         child: Row(
           children: [
             if (widget.icon != null) ...[
-              Icon(widget.icon, size: 24 * s, color: context.v2HintColor),
+              // 意图+2026-11-16（11bf，客户修正版）：onIconLongPress 传入时
+              // 图标包一层独立 GestureDetector（opaque 扩大热区，手势为
+              // **长按**）——普通用户不会长按图标，不干扰点击聚焦；不传该
+              // 参数时无长按识别器，与直接渲染 Icon 等价，其他调用点零变化。
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onLongPress: widget.onIconLongPress,
+                child: Icon(widget.icon,
+                    size: 24 * s, color: context.v2HintColor),
+              ),
               SizedBox(width: 25 * s),
             ],
             Expanded(

@@ -37,7 +37,14 @@ class E2eeService {
   final X25519 _x25519 = X25519();
   final AesGcm _aes = AesGcm.with256bits();
 
-  int? _uid;
+  // 2026-11-15 修复（H5 首次注册收不到解密根因）：uid 一律持有服务端原样
+  // 字符串、**绝不转 int**。服务端 user.id 是雪花 ID（19 位、远超 2^53），
+  // Flutter Web（dart2js）的 int 是 JS double，int.tryParse 必然丢精度，
+  // uid.toString() 变成错位数字 → decryptText 匹配 kw[].u 永远落空 →
+  // ready=true 下解密恒失败（「密钥解密失败」）；App/VM 端 int64 精确所以
+  // 同套代码一直正常。全工程只有本服务在做 int 转换，其余链路（发送 kw、
+  // 服务端路由、会话）都直接用字符串——改为字符串后与全链路口径一致。
+  String? _uid;
   String? _privB64; // 本机私钥（base64 32B，仅 secure storage / 内存）
   String? _pubB64;
   String mode = ''; // off / server / e2ee（后台加密方式）
@@ -110,8 +117,8 @@ class E2eeService {
     _failKeys.clear();
   }
 
-  String _kPriv(int uid) => 'e2ee_priv_$uid';
-  String _kPub(int uid) => 'e2ee_pub_$uid';
+  String _kPriv(String uid) => 'e2ee_priv_$uid';
+  String _kPub(String uid) => 'e2ee_pub_$uid';
 
   bool get isReady => ready.value;
 
@@ -133,18 +140,19 @@ class E2eeService {
       } catch (_) {}
     }
     final idStr = UserCache.myId;
-    final uid = int.tryParse(idStr ?? '');
-    if (uid == null) return;
-    if (_uid == uid && ready.value) return;
-    if (_uid != uid) {
-      _uid = uid;
+    // 2026-11-15：不再 int.tryParse（Web 上雪花 ID 丢精度，见 _uid 字段注释），
+    // 直接用服务端原样字符串做账号判定与存储键（App 端 int64 精确，键名不变）。
+    if (idStr == null || idStr.isEmpty) return;
+    if (_uid == idStr && ready.value) return;
+    if (_uid != idStr) {
+      _uid = idStr;
       _privB64 = null;
       _pubB64 = null;
       ready.value = false;
       _plainCache.clear();
       try {
-        _privB64 = await _storage.read(key: _kPriv(uid));
-        _pubB64 = await _storage.read(key: _kPub(uid));
+        _privB64 = await _storage.read(key: _kPriv(_uid!));
+        _pubB64 = await _storage.read(key: _kPub(_uid!));
       } catch (_) {}
       // 配对校验（2026-09-18）：脏备份恢复流程可能把「公钥当私钥」落过本机，
       // 这种 priv 无法解任何消息却让 ready=true —— 启动时校验一次配对，
@@ -163,10 +171,11 @@ class E2eeService {
   /// 登出/换号：清内存与 secure storage 里的本机私钥（LocalStore.clearUserData 调用）。
   /// 兼容 ensureLoaded 未跑过的场景：同时按 UserCache.myId 兜底删。
   Future<void> resetLocal() async {
-    final uids = <int>{
-      if (_uid != null) _uid!,
-      int.tryParse(UserCache.myId ?? '') ?? -1,
-    }..remove(-1);
+    // 2026-11-15：uid 改字符串口径（同 _uid 字段注释），不再 int.tryParse。
+    final uids = <String>{
+      if (_uid != null && _uid!.isNotEmpty) _uid!,
+      if ((UserCache.myId ?? '').isNotEmpty) UserCache.myId!,
+    };
     _uid = null;
     _privB64 = null;
     _pubB64 = null;
@@ -218,6 +227,10 @@ class E2eeService {
         _privB64 = priv;
         _pubB64 = (me['publicKey'] ?? '').toString();
         await _persistLocal();
+        // 2026-11-15：私钥就绪后清理解密失败标记（与 PC 端 clearDecryptCaches
+        // 对齐）——此前未就绪期间的失败占位若被记入 _failKeys，解锁后仍会
+        // 永远显示「密钥解密失败」不重试。
+        invalidateCache();
         return;
       }
       // 首次建钥：生成密钥对 → 备份 → 上云
@@ -237,6 +250,10 @@ class E2eeService {
       await _persistLocal();
       hasKeysRemote = true;
       hasBackupRemote = true;
+      // 2026-11-15：同上，建钥完成后清解密缓存/失败标记，让注册→进聊天
+      // 窗口期内先到、按锁定占位渲染的密文气泡立即重解（否则会被
+      // _failKeys 卡在「密钥解密失败」）。
+      invalidateCache();
     } catch (_) {}
   }
 
@@ -302,6 +319,8 @@ class E2eeService {
               _privB64 = privB64;
               _pubB64 = serverPub;
               await _persistLocal();
+              // 2026-11-15：私钥就绪后清解密失败标记（同 setupAfterLogin 注释）
+              invalidateCache();
               return true;
             }
           }
@@ -327,7 +346,7 @@ class E2eeService {
         final priv = _privB64;
         if (priv == null || priv.isEmpty) return false;
         payload =
-            await _wrap(base64.decode(priv), newPub, (_uid ?? 0).toString());
+            await _wrap(base64.decode(priv), newPub, _uid ?? '');
       }
       final r = await _api.put('/api/v1/e2ee/recover/approve', data: {
         'requestId': requestId,
@@ -424,6 +443,12 @@ class E2eeService {
     _privB64 = priv;
     _pubB64 = (me['publicKey'] ?? '').toString();
     await _persistLocal();
+    // 2026-11-15：解锁成功后必须清理解密失败标记（与 PC 端 e2ee.js
+    // unlockWithPassword 的 clearDecryptCaches 对齐）——否则本次会话里
+    // 已被记入 _failKeys 的占位气泡重绘时直接回「密钥解密失败」，
+    // 解锁成功也永远解不出明文（客户实测「点击后提示密钥解密失败」的
+    // 直接推手之一）。
+    invalidateCache();
     return true;
   }
 
@@ -505,10 +530,11 @@ class E2eeService {
   }
 
   Future<void> _persistLocal() async {
-    // uid 兜底：_uid 未及赋值时按 UserCache 再解析一次（防竞态把私钥丢本机）
-    final uid = _uid ?? int.tryParse(UserCache.myId ?? '');
-    if (uid != null) _uid = uid;
-    if (uid == null) return;
+    // uid 兜底：_uid 未及赋值时按 UserCache 再解析一次（防竞态把私钥丢本机）。
+    // 2026-11-15：uid 为服务端原样字符串（不再 int.tryParse，见 _uid 注释）。
+    final uid = _uid ?? UserCache.myId;
+    if (uid != null && uid.isNotEmpty) _uid = uid;
+    if (uid == null || uid.isEmpty) return;
     try {
       await _storage.write(key: _kPriv(uid), value: _privB64 ?? '');
       await _storage.write(key: _kPub(uid), value: _pubB64 ?? '');
@@ -585,8 +611,10 @@ class E2eeService {
     }
     await ensureLoaded();
     final priv = _privB64;
+    // 2026-11-15：uid 用服务端原样字符串匹配 kw[].u（此前 int.tryParse 在
+    // Flutter Web 上对雪花 ID 丢精度 → kw 匹配永落空 → 解密恒失败）。
     final uid = _uid;
-    if (priv == null || uid == null) return null;
+    if (priv == null || uid == null || uid.isEmpty) return null;
     try {
       final j = jsonDecode(content);
       if (j is! Map) return null;
@@ -594,7 +622,7 @@ class E2eeService {
       if (kw is! List || kw.isEmpty) return null;
       Map<String, dynamic>? mine;
       for (final e in kw) {
-        if (e is Map && e['u']?.toString() == uid.toString()) {
+        if (e is Map && e['u']?.toString() == uid) {
           mine = Map<String, dynamic>.from(e);
           break;
         }

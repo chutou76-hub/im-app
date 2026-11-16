@@ -53,12 +53,17 @@ class MapConfig {
       final r = await ApiClient.instance.get('/api/v1/auth/config');
       final d = (r.data as Map?)?['data'];
       final m = d is Map ? d : const {};
+      // 意图+2026-11-15（11bd）：四个 key 字段统一 .trim()——后台配置值若
+      // 带两侧空白，拼进高德脚本 URL 会变成带空格/%20 的非法 key（H5 触发
+      // AMAP_JS_NOT_LOADED；Web 服务 key 则气泡静态图 403）。trim 放在
+      // MapConfig.get() 收口：选点页（WebView 版 _buildAmapHtml 同样取
+      // _cfg.amapJsKey）与 H5 平台视图两个消费端一并受益，无风险。
       _cached = MapConfig(
         engine: (m['mapEngine'] ?? '').toString(),
-        googleKey: (m['googleMapsApiKey'] ?? '').toString(),
-        amapJsKey: (m['amapJsKey'] ?? '').toString(),
-        amapJscode: (m['amapJscode'] ?? '').toString(),
-        amapWebKey: (m['amapWebKey'] ?? '').toString(),
+        googleKey: (m['googleMapsApiKey'] ?? '').toString().trim(),
+        amapJsKey: (m['amapJsKey'] ?? '').toString().trim(),
+        amapJscode: (m['amapJscode'] ?? '').toString().trim(),
+        amapWebKey: (m['amapWebKey'] ?? '').toString().trim(),
       );
     } catch (_) {
       _cached = const MapConfig();
@@ -336,11 +341,20 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
         );
       }
     } catch (_) {}
-    // baseUrl 指到对应地图域，保证 https 安全上下文（定位 API 需要）
+    // 意图+2026-11-15（11be）：高德 Key 已配置**域名白名单**且正在生效
+    // （主理人实测：Referer=https://www.tyhsna.com/h5/ → 200 正常 JS；
+    //  Referer=https://webapi.amap.com → INVALID_USER_DOMAIN(10006) 被拒）。
+    // loadHtmlString 的 baseUrl 决定 WebView 请求 amap 脚本时的 Referer，
+    // 原 baseUrl=webapi.amap.com 自身不在白名单内，白名单生效后 App 端会
+    // 开始被拒（客户此前「App 正常」是白名单生效前状态）→ 高德分支改为
+    // 客户域名 https://www.tyhsna.com；仍是 https，geolocation 安全上下文
+    // 不受影响；经典 script 标签无 CORS 限制，加载 amap 脚本无影响。
+    // 谷歌分支无域名白名单机制，maps.googleapis.com 保持不动。
+    // 配套：客户需在高德后台把 www.tyhsna.com / tyhsna.com 加入白名单。
     await wc.loadHtmlString(
       html,
       baseUrl: _cfg.isAmap
-          ? 'https://webapi.amap.com'
+          ? 'https://www.tyhsna.com'
           : 'https://maps.googleapis.com',
     );
     if (!mounted) return;
@@ -430,7 +444,11 @@ window.addEventListener('load', init);
   ///     **不弹 alert、只打 console**，所以除劫持 alert 外还有三路兜底上报：
   ///     window.onerror / 瓦片 complete 超时 / Geocoder 错误回调带错误码；
   ///   - 坐标经纬序为 [lng, lat]（与谷歌 {lat,lng} 相反，勿混）；
-  ///   - moveend = 地图停稳，直接反解中心点（无需再防抖）。
+  ///   - moveend = 地图停稳，直接反解中心点（无需再防抖）；
+  ///   - 2026-11-15（11be）：Key 配置域名白名单后，请求 amap 脚本的 Referer
+  ///     必须在白名单内（App 端由 loadHtmlString 的 baseUrl 决定，已改客户
+  ///     域名）；H5 端（location_picker_web_impl）Referer 天然是部署域名，
+  ///     需与高德后台白名单一致，否则同样 10006 被拒。
   static String _buildAmapHtml(String key, String jscode) {
     final sc = jsonEncode(jscode); // 注入 JS 字符串做转义
     return '''<!DOCTYPE html>

@@ -15,6 +15,7 @@ import '../theme/app_theme.dart';
 import '../widgets/agreement_checkbox.dart';
 import '../widgets/app_dialogs.dart';
 import '../widgets/bind_phone_sheet.dart'; // 注册后强制绑定手机弹窗（2026-11-02 需求4）
+import '../widgets/openinstall_diag_dialog.dart'; // 2026-11-16（11bf）邀请码诊断报告弹窗（长按邀请码图标/页面标题，无可见 UI）
 import '../widgets/v2_avatars.dart';
 import '../widgets/v2_kit.dart';
 import 'home_shell.dart';
@@ -893,7 +894,16 @@ class _RegisterPageState extends State<RegisterPage> {
         ),
       ),
       SizedBox(height: 24 * s * v),
-      Center(child: Text(t('regStep2Title'), style: title)),
+      // 2026-11-16（11bf，客户修正版）：标题挂**长按**手势——邀请码后台
+      // 开关关闭（_inviteRequired=false）时邀请码框不渲染、图标长按入口
+      // 不存在，此处兜底（无任何可见提示，普通用户不会长按标题）。
+      Center(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onLongPress: _showInviteDiag,
+          child: Text(t('regStep2Title'), style: title),
+        ),
+      ),
       SizedBox(height: 20 * s),
       Center(
         child: Text(
@@ -931,10 +941,14 @@ class _RegisterPageState extends State<RegisterPage> {
     // 邀请码（2026-09-22 需求3 合并）：仅后台开启「邀请码注册」时显示且必填；
     // 关闭 → 不渲染输入框（游客侧由服务端 2003 控制是否弹码）
     if (_inviteRequired) ...[
+      // 2026-11-16（11bf，客户修正版）：**长按**邀请码框左侧礼物图标 →
+      // 打开邀请码诊断流水（客户要求无任何可见 UI、入口放在普通用户绝不
+      // 会触发的长按手势上；点击聚焦行为不受影响）
       V2Field(
         controller: _inviteCode,
         hint: t('regInviteHintRequired'),
         icon: Icons.card_giftcard_rounded,
+        onIconLongPress: _showInviteDiag,
         textInputAction: TextInputAction.done,
         inputFormatters: [LengthLimitingTextInputFormatter(32)],
       ),
@@ -959,6 +973,16 @@ class _RegisterPageState extends State<RegisterPage> {
       _bottomRow(s),
       SizedBox(height: 24 * s),
     ];
+  }
+
+  /// 意图+2026-11-16（11bf，客户修正版）：打开邀请码诊断流水弹窗（客户
+  /// 反馈免填邀请码再次异常，要求诊断入口**无任何可见 UI**——挂长按手势
+  /// 供开发测试用：_inviteRequired=true 长按邀请码框礼物图标；
+  /// _inviteRequired=false 长按本页标题「完善资料」（输入框不渲染、图标
+  /// 入口不存在时的兜底；普通用户绝不会长按标题，无干扰）。11aw 时代
+  /// _showDiag 口径恢复，2026-11-15 远程合流时被删。
+  Future<void> _showInviteDiag() async {
+    await showOpenInstallDiagDialog(context);
   }
 
   Widget _avatarRow(List<int> indexes, double s) {

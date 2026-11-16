@@ -143,9 +143,15 @@ html.Element _buildContainer({
     final api = html.ScriptElement()
       ..src =
           'https://webapi.amap.com/maps?v=2.0&key=$jsKey&plugin=AMap.Geocoder,AMap.Geolocation';
-    api.onLoad.listen((_) => _injectPageJs(_amapPageJs(viewId, cbName)));
-    api.onError.listen((_) =>
-        _injectPageJs("$cbName(JSON.stringify({amapAlert:'AMAP_JS_NOT_LOADED'}));"));
+    api.onLoad.listen((_) => _injectPageJs(_amapPageJs(
+        viewId, cbName, _amapDiagBase(jsKey))));
+    // 意图+2026-11-15（11bd）：onError = 脚本网络层加载失败（部署域名未进
+    // 高德安全域名白名单 / 断网 / 代理拦截）。原样只报裸错误码无法区分
+    // 「网络被拦」与「key 为空/带空白」，现改为带 origin+keyLen 自诊断，
+    // 客户侧免抓包即可定位（keyLen=0 → 后台没配或缓存了空 key）。
+    api.onError.listen((_) => _injectPageJs(
+        "$cbName(JSON.stringify({amapAlert:"
+        "${jsonEncode(_amapJsNotLoadedDiag('script onError', jsKey))}}));"));
     html.document.body?.append(api);
   } else {
     // 谷歌：Maps JS API（浏览器直开无 WebView 授权问题），key 校验失败走
@@ -163,6 +169,21 @@ html.Element _buildContainer({
 void _injectPageJs(String code) {
   html.document.body?.append(html.ScriptElement()..text = code);
 }
+
+/// 意图+2026-11-15（11bd）：组装 AMAP_JS_NOT_LOADED 自诊断信息。
+/// [cause] 区分触发点（script onError / AMap undefined）；origin 取页面
+/// location.origin（H5 部署域名一眼可见）；keyLen 只给长度不给 key 本身
+///（避免泄露）——keyLen=0 即「后台没配 / MapConfig 缓存了空 key」，
+/// keyLen>0 但报错则往「部署域名白名单 / 网络拦截」排查。
+String _amapJsNotLoadedDiag(String cause, String jsKey) =>
+    'AMAP_JS_NOT_LOADED($cause|origin=${html.window.location.origin}'
+    '|keyLen=${jsKey.length})';
+
+/// 意图+2026-11-15（11bd）：给页面 JS 的自诊断基础段（origin+keyLen）。
+/// `sec` 标记（_AMapSecurityConfig 是否已注入）只能在页面 JS 里判，
+/// 由 _amapPageJs 在该基础段后追加。
+String _amapDiagBase(String jsKey) =>
+    'origin=${html.window.location.origin}|keyLen=${jsKey.length}|';
 
 /// 中心固定大头针（与 WebView 版同款 SVG）
 const String _pinSvg =
@@ -187,11 +208,21 @@ function _pick(loc, name, addr, prov, city, dist, country){
 /// 高德引擎页面逻辑：moveend 停稳反解中心点；addressComponent 取省市区
 /// （直辖市 city 为空数组 → 用省名兜底；district/city 非字符串同样兜空）。
 /// 定位用 AMap.Geolocation 插件（浏览器下走 HTML5 geolocation/IP 定位，失败不阻断）。
-String _amapPageJs(int viewId, String cbName) {
+/// [diagBase]（2026-11-15 11bd）：Dart 侧预组装的 origin+keyLen 诊断段，
+/// init 里 AMap undefined 上报时拼上 sec 标记一起回传。
+String _amapPageJs(int viewId, String cbName, String diagBase) {
   return '''${_cbJs(cbName)}
 var map, geocoder, lastJson='', mapReady=false;
 function init(){
-  if (typeof AMap === 'undefined') { _post(JSON.stringify({amapAlert:'AMAP_JS_NOT_LOADED'})); return; }
+  // 意图+2026-11-15（11bd）：AMap undefined = 脚本执行了但没定义全局
+  //（高德实测：key 为空时只 console.log 不定义 AMap，脚本本身加载成功、
+  // onError 不触发）——上报带 origin/keyLen/sec 自诊断，免抓包定位：
+  // sec=false → 安全密钥没注入；keyLen=0 → 后台没配/缓存了空 key。
+  if (typeof AMap === 'undefined') {
+    _post(JSON.stringify({amapAlert: 'AMAP_JS_NOT_LOADED(AMap undefined|'
+      + ${jsonEncode(diagBase)} + 'sec=' + (!!window._AMapSecurityConfig) + ')'}));
+    return;
+  }
   map = new AMap.Map('loc_map_$viewId', { zoom:15, center:[121.4737,31.2304], viewMode:'2D' });
   // complete = 底图瓦片加载成功（隐含 Key+安全密钥校验通过）
   map.on('complete', function(){ mapReady = true; });
@@ -241,8 +272,11 @@ function reverse(){
     }
   });
 }
-// H5 下选点页进入时 window load 已触发 → 直接初始化（AMap 全局已就绪）
-if (typeof AMap !== 'undefined') init();
+// 意图+2026-11-15（11bd）：改为**无条件**调用 init()——原先
+// `if (typeof AMap !== 'undefined') init()` 会让「key 为空（脚本加载成功但
+// 不定义 AMap）」场景连 init 都进不去，line 194 的 AMap undefined 自诊断
+// 成死代码、用户只看到无地图无报错。init() 内部已有 undefined 检查+上报。
+init();
 ''';
 }
 

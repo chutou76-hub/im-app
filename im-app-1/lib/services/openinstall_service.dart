@@ -48,11 +48,14 @@ class OpenInstallService {
   /// Xinstall 官方 Flutter 插件单例（getInstance()，v1.5.0+ 必须 init 后才能用）
   XinstallFlutterPlugin? _xinstall;
 
-  /// 调试日志开关（编译期注入，默认关）。
-  /// 打开方式：flutter build apk --dart-define=OPENINSTALL_DEBUG=true
-  /// 打开后：① 打开 SDK 内部日志（setLog）；② 记录诊断流水，App 启动
-  /// 后自动弹出可复制的诊断框（见 [diagnostics]）。
-  static const bool _verbose = bool.fromEnvironment('OPENINSTALL_DEBUG');
+  /// 调试日志开关（编译期注入，默认**开**）。
+  /// 打开方式：编译期 `--dart-define=OPENINSTALL_DEBUG=false` 显式关闭。
+  /// 打开后：① 打开 SDK 内部日志（setLog）；② 记录诊断流水，注册页
+  /// 邀请码图标/底部小入口可打开诊断框（见 [diagnostics]）。
+  // 2026-11-16（11bf）：客户反馈免填邀请码再次异常，重新默认开启诊断
+  // 流水（2026-11-15 11ay 曾默认关闭）；修复验证后再改回编译期开关。
+  static const bool _verbose =
+      bool.fromEnvironment('OPENINSTALL_DEBUG', defaultValue: true);
 
   /// 防止重复初始化（main() 与页面可能各调一次）
   bool _inited = false;
